@@ -17,13 +17,13 @@
 :root {
   font-family: "Manrope Variable", sans-serif;
   color: #e8e4d9;
-  background: #141611;
+  background: #10120f;
   color-scheme: dark;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
-  --bg: #141611;
-  --surface: #23261e;
+  --bg: #10120f;
+  --surface: #1d211b;
   --ink: #e8e4d9;
   --muted: #b5b7a8;
   --line: #4d5243;
@@ -320,53 +320,6 @@ legend {
 .introduction h1 {
   margin-bottom: 16px;
 }
-.ambition-options {
-  text-align: left;
-  margin: 24px 0;
-}
-.ambition-options legend {
-  font-size: 16px;
-  font-weight: 600;
-  margin-bottom: 10px;
-}
-.ambition-options label {
-  display: flex;
-  gap: 14px;
-  align-items: flex-start;
-  border: 1px solid var(--line);
-  padding: 16px;
-  margin-top: 10px;
-  border-radius: 3px;
-  cursor: pointer;
-  transition:
-    background-color 180ms,
-    border-color 180ms;
-}
-.ambition-options label:has(:checked) {
-  background: #d1b9890b;
-  border-color: var(--accent);
-}
-.ambition-options input {
-  accent-color: var(--accent);
-  width: 18px;
-  height: 18px;
-  margin: 3px 0 0;
-  flex-shrink: 0;
-}
-.ambition-options strong {
-  font-weight: 550;
-  font-size: 16px;
-}
-.ambition-options label span span {
-  display: block;
-  color: var(--muted);
-  margin-top: 8px;
-  font-size: 14px;
-  line-height: 1.5;
-}
-.introduction > .text-button {
-  margin-top: 16px;
-}
 .game-layout {
   max-width: 420px;
   margin: 20px auto 0;
@@ -468,7 +421,7 @@ legend {
   color: var(--danger);
 }
 .card-arrival {
-  animation: card-arrive 450ms var(--ease);
+  animation: card-arrive 460ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 .decision-card {
   position: relative;
@@ -488,15 +441,15 @@ legend {
 }
 .decision-card.leaving {
   pointer-events: none;
-  animation: card-leave 240ms cubic-bezier(0.4, 0, 1, 1) forwards;
+  animation: card-leave 360ms cubic-bezier(0.22, 0.65, 0.35, 1) forwards;
 }
 .decision-card.leaving-0 {
-  --exit-x: -85px;
-  --exit-angle: -7deg;
+  --exit-x: calc(-1 * min(90vw, 640px));
+  --exit-angle: -19deg;
 }
 .decision-card.leaving-1 {
-  --exit-x: 85px;
-  --exit-angle: 7deg;
+  --exit-x: min(90vw, 640px);
+  --exit-angle: 19deg;
 }
 .portrait-wrap {
   height: 185px;
@@ -555,7 +508,7 @@ legend {
   top: 12px;
   right: 14px;
   padding: 5px 8px;
-  background: #141611dc;
+  background: #10120fdc;
   color: #e8c1a4;
   font-size: 14px;
   border-radius: 2px;
@@ -614,12 +567,6 @@ legend {
 }
 .danger-warning {
   color: var(--danger);
-}
-.retire-button {
-  display: block;
-  margin: 8px auto 0;
-  color: var(--accent);
-  font-size: 14px;
 }
 .storage-warning {
   font-size: 14px;
@@ -690,9 +637,6 @@ legend {
   color: var(--accent);
 }
 .ending > .text-button {
-  margin-top: 18px;
-}
-.next-ambition {
   margin-top: 18px;
 }
 details {
@@ -883,7 +827,7 @@ dialog.dialog-closing::backdrop {
 @keyframes card-arrive {
   from {
     opacity: 0;
-    transform: translateY(12px) rotate(-1deg);
+    transform: translateY(24px) scale(0.96) rotate(-1.5deg);
   }
   to {
     opacity: 1;
@@ -891,6 +835,10 @@ dialog.dialog-closing::backdrop {
   }
 }
 @keyframes card-leave {
+  from {
+    opacity: 1;
+    transform: translateX(var(--drag-x, 0px)) rotate(var(--drag-rotation, 0deg));
+  }
   to {
     opacity: 0;
     transform: translateX(var(--exit-x)) rotate(var(--exit-angle));
@@ -1080,6 +1028,471 @@ dialog.dialog-closing::backdrop {
     padding-block: 12px;
   }
 }
+
+.decision-stage {
+  display: grid;
+  isolation: isolate;
+}
+.decision-stage > .card-arrival {
+  grid-area: 1 / 1;
+  min-width: 0;
+}
+.outgoing-card {
+  z-index: 1;
+  pointer-events: none;
+  animation: none;
+}
+.app {
+  position: relative;
+  isolation: isolate;
+}
+.world-scene,
+.world-vignette {
+  position: fixed;
+  inset: 0;
+  z-index: -2;
+  pointer-events: none;
+}
+.world-scene {
+  overflow: hidden;
+  animation: world-reveal 1600ms ease-out both;
+}
+.world-scene img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transform: scale(1.035);
+  animation: world-settle 14s cubic-bezier(0.1, 0.5, 0.3, 1) both;
+}
+.world-vignette {
+  z-index: -1;
+  background: linear-gradient(180deg, #080b0ddd, #0d100ce8 52%, #0b0e0df7);
+  transition: opacity 900ms ease;
+}
+.app[data-phase="intro"] .world-vignette {
+  background: linear-gradient(180deg, #090c1055, #090c10b5 35%, #0a0c0dec 85%);
+}
+.app[data-ended] .world-vignette {
+  background: #120b0de8;
+}
+.masthead {
+  max-width: 1120px;
+  position: relative;
+}
+.wordmark {
+  color: #d6c4a1;
+  font-size: 22px;
+}
+.welcome {
+  max-width: 460px;
+  margin-top: clamp(48px, 12vh, 130px);
+}
+.welcome h1 {
+  font-size: clamp(40px, 5vw, 58px);
+  margin-bottom: 38px;
+}
+.welcome textarea {
+  background: #1d211bbd;
+  font: 22px/1.5 var(--display);
+  border-color: #6a695554;
+}
+.welcome .begin {
+  margin-top: 18px;
+}
+.campaign-matches {
+  text-align: left;
+  margin-top: 0;
+  padding-top: 0;
+  animation: arrive 350ms var(--ease);
+}
+.campaign-matches h2 {
+  font-size: 28px;
+  margin-bottom: 10px;
+}
+.campaign-matches > p {
+  color: var(--muted);
+  font-size: 14px;
+}
+.campaign-match {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  text-align: left;
+  gap: 16px;
+  margin: 10px 0;
+  padding: 18px;
+}
+.campaign-match strong {
+  font: 23px/1.2 var(--display);
+  font-weight: 450;
+  display: block;
+}
+.campaign-match span span {
+  display: block;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.5;
+  margin-top: 7px;
+}
+.world-arrival {
+  width: min(100%, 550px);
+  min-height: calc(100svh - 115px);
+  margin: auto;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  text-align: center;
+  padding: 28px 0;
+}
+.arrival-content {
+  animation: arrival-text 700ms var(--ease) both;
+}
+.world-arrival h1 {
+  font-size: clamp(44px, 6vw, 76px);
+  line-height: 1.02;
+  margin-bottom: 24px;
+  outline: none;
+  overflow-wrap: anywhere;
+}
+.arrival-summary {
+  font: 24px/1.45 var(--display);
+  color: #eee8d9;
+  max-width: 470px;
+  margin: 0 auto 24px;
+}
+.arrival-resources {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 18px;
+  margin: 20px 0 32px;
+}
+.arrival-resources > span {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  color: #ded6c4;
+}
+.arrival-resources img {
+  border-radius: 50%;
+  object-fit: cover;
+}
+.arrival-controls {
+  width: min(100%, 360px);
+  margin: 20px auto 0;
+}
+.world-progress {
+  text-align: left;
+  margin-top: 22px;
+}
+.world-progress p {
+  display: flex;
+  justify-content: space-between;
+  font-size: 14px;
+  color: #e6d8bc;
+  margin-bottom: 12px;
+}
+.world-progress p span {
+  font-variant-numeric: tabular-nums;
+}
+.world-progress > div {
+  height: 2px;
+  background: #d1b98930;
+  overflow: hidden;
+}
+.world-progress i {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  transform-origin: left;
+  transition: transform 600ms var(--ease);
+}
+.world-progress > span {
+  display: block;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--muted);
+  margin-top: 14px;
+  text-align: center;
+}
+.arrival-step-1 h1 {
+  font-size: 48px;
+}
+.arrival-factions {
+  max-width: 440px;
+  margin: auto;
+  text-align: left;
+}
+.arrival-factions > div {
+  display: flex;
+  gap: 18px;
+  align-items: center;
+  padding: 14px 0;
+  border-top: 1px solid #d1b98925;
+  animation: arrival-text 600ms var(--ease) both;
+  animation-delay: calc(var(--order) * 70ms);
+}
+.arrival-factions img {
+  border-radius: 50%;
+  object-fit: cover;
+  flex-shrink: 0;
+}
+.arrival-factions h2 {
+  font: 23px/1.2 var(--display);
+  margin-bottom: 6px;
+  color: #ebddc0;
+}
+.arrival-factions p {
+  font-size: 14px;
+  color: #cac5b8;
+  margin: 0;
+}
+.arrival-rule {
+  color: var(--muted);
+  font-size: 14px;
+  margin: 24px 0 0;
+}
+.game-layout {
+  max-width: 390px;
+  margin-top: 12px;
+}
+.reign-line {
+  font-size: 20px;
+}
+.reign-line > span {
+  font-size: 12px;
+  letter-spacing: 0.03em;
+}
+.factions {
+  position: relative;
+  background: transparent;
+  margin-bottom: 16px;
+  padding: 8px 15px;
+  gap: 34px;
+}
+.faction > svg {
+  width: 25px;
+  height: 25px;
+}
+.meter {
+  height: 3px;
+  background: #d1b98925;
+}
+.support-number {
+  font-size: 13px;
+}
+.decision-card {
+  display: flex;
+  flex-direction: column;
+  background: transparent;
+  overflow: visible;
+  box-shadow: none;
+  border-radius: 0;
+  transform-origin: 50% 80%;
+}
+.card-body {
+  order: -1;
+  padding: 10px 4px 22px;
+  min-height: 130px;
+  display: grid;
+  align-items: center;
+  text-align: center;
+}
+.dilemma {
+  font-size: 25px;
+  line-height: 1.35;
+}
+.portrait-wrap {
+  width: clamp(200px, 31svh, 280px);
+  height: auto;
+  aspect-ratio: 1;
+  align-self: center;
+  border-radius: 7px;
+  background: #24281f;
+  box-shadow:
+    0 1px 1px #ffffff25 inset,
+    0 16px 50px #0005,
+    0 6px 0 -2px #4c4a37,
+    0 11px 0 -4px #292d24;
+}
+.generated-portrait {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center;
+  display: block;
+}
+.portrait-shade {
+  background: linear-gradient(0deg, #0e130ee8, transparent 65%);
+}
+.speaker {
+  inset: auto 16px 15px;
+}
+.speaker > span:first-child {
+  font-size: 23px;
+}
+.speaker > span:last-child {
+  color: #ddd8c9;
+  font-size: 13px;
+}
+.choices {
+  border: 0;
+  gap: 24px;
+  margin-top: 22px;
+}
+.choices button {
+  min-height: 70px;
+  padding: 10px 2px;
+  border-top: 1px solid #d1b98955;
+  gap: 8px;
+  font-size: 16px;
+}
+.choices button + button {
+  border-left: 0;
+}
+.choices button[data-selected="true"],
+.choices button:hover:not(:disabled) {
+  background: transparent;
+  color: #f3d7a4;
+  border-top-color: #edd4a4;
+}
+.choices button:active:not(:disabled) {
+  scale: 0.98;
+}
+.decision-hint {
+  margin-top: 0;
+  font-size: 13px;
+  min-height: 32px;
+}
+.card-classification {
+  font-size: 12px;
+  background: #15150ede;
+}
+.card-wait {
+  min-height: 410px;
+  background: transparent;
+}
+.ending {
+  animation: fall-arrival 1100ms var(--ease) both;
+}
+.ending h1 {
+  font-size: clamp(42px, 6vw, 64px);
+}
+.ending .succession {
+  animation: arrive 600ms 400ms var(--ease) both;
+}
+@keyframes world-reveal {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes world-settle {
+  from {
+    transform: scale(1.11);
+  }
+  to {
+    transform: scale(1.035);
+  }
+}
+@keyframes arrival-text {
+  from {
+    opacity: 0;
+    transform: translateY(18px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes fall-arrival {
+  from {
+    opacity: 0;
+    transform: translateY(22px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@media (max-width: 600px) {
+  .world-arrival {
+    min-height: calc(100svh - 100px);
+    padding: 28px 0;
+  }
+  .arrival-summary {
+    font-size: 23px;
+  }
+  .arrival-factions > div {
+    gap: 14px;
+    padding-block: 12px;
+  }
+  .arrival-factions h2 {
+    font-size: 22px;
+  }
+  .arrival-resources {
+    gap: 12px;
+  }
+  .arrival-resources > span {
+    gap: 5px;
+    font-size: 13px;
+  }
+  .arrival-resources img {
+    width: 36px;
+    height: 36px;
+  }
+  .game-layout {
+    margin-top: 4px;
+  }
+  .card-body {
+    padding: 6px 0 20px;
+    min-height: 128px;
+  }
+  .dilemma {
+    font-size: 24px;
+  }
+  .long-dilemma {
+    font-size: 21px;
+  }
+  .factions {
+    margin-bottom: 6px;
+    padding-block: 5px;
+    gap: 28px;
+  }
+  .choices {
+    gap: 18px;
+  }
+}
+@media (max-height: 740px) {
+  .reign-line {
+    margin-bottom: 8px;
+  }
+  .reign-line > span {
+    margin-top: 4px;
+  }
+  .faction {
+    gap: 5px;
+    min-height: 58px;
+  }
+  .card-body {
+    min-height: 112px;
+    padding-bottom: 16px;
+  }
+  .portrait-wrap {
+    width: 210px;
+    height: auto;
+  }
+  .choices {
+    margin-top: 18px;
+  }
+  .choices button {
+    min-height: 62px;
+  }
+}
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
@@ -1100,4 +1513,24 @@ dialog.dialog-closing::backdrop {
   .faction-change {
     opacity: 1;
   }
+}
+
+.app[data-motion="reduced"] *,
+.app[data-motion="reduced"] *::before,
+.app[data-motion="reduced"] *::after {
+  animation: none !important;
+  transition: none !important;
+  scroll-behavior: auto !important;
+}
+.app[data-motion="reduced"] .decision-card {
+  transform: none !important;
+}
+.app[data-motion="reduced"] .outgoing-card {
+  visibility: hidden;
+}
+.app[data-motion="reduced"] .faction-change {
+  opacity: 1;
+}
+.app[data-motion="reduced"] button:active {
+  scale: 1;
 }

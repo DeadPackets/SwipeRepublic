@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { Card, PublicGame, Side } from "./game";
-import { AMBITION_TARGET, MAX_TURNS, RETIRE_TURN } from "./rules";
+import { WorldArrival, type CreationProgress } from "./WorldArrival";
+import type { CampaignMatch } from "../worker/campaigns";
 import { DecisionCard } from "./DecisionCard";
 import { AnimatedNumber } from "./AnimatedNumber";
 import {
@@ -15,6 +16,7 @@ type Envelope = {
   busy: boolean;
   error?: string;
   id: string;
+  creation?: CreationProgress | null;
 };
 type Save = SavedSociety;
 type Action = { path: string; body: Record<string, unknown> };
@@ -34,16 +36,17 @@ function write(key: string, value: unknown) {
     return false;
   }
 }
-async function api(
+async function api<T = Envelope>(
   path: string,
   body?: Record<string, unknown>,
-): Promise<Envelope> {
+): Promise<T> {
   const response = await fetch(path, {
     method: body ? "POST" : "GET",
     headers: body ? { "Content-Type": "application/json" } : undefined,
     body: body ? JSON.stringify(body) : undefined,
   });
-  const data = (await response.json().catch(() => null)) as Envelope | null;
+  const data = (await response.json().catch(() => null)) as
+    (T & { error?: string }) | null;
   if (!response.ok || !data)
     throw new Error(
       data?.error ||
@@ -79,8 +82,7 @@ function download(game: PublicGame) {
     game.world.summary,
     "",
     ...game.endings.map(
-      (e, i) =>
-        `Reign ${i + 1}: ${e.ruler}\n${e.title}. ${e.reason}\n${e.ambition}: ${e.progress}/${AMBITION_TARGET}\n`,
+      (e, i) => `Reign ${i + 1}: ${e.ruler}\n${e.title}. ${e.reason}\n`,
     ),
     "The chronicle",
     ...game.history.map(
@@ -110,6 +112,19 @@ export default function App() {
   const active = useRef(id);
   const [game, setGame] = useState<PublicGame | null>(null);
   const [prompt, setPrompt] = useState("");
+  const [motionPreference, setMotionPreference] = useState<boolean | null>(() =>
+    read("swipe-republic:reduced-motion", null),
+  );
+  const [systemMotion, setSystemMotion] = useState(
+    () => matchMedia("(prefers-reduced-motion: reduce)").matches,
+  );
+  const reducedMotion = motionPreference ?? systemMotion;
+  useEffect(() => {
+    const media = matchMedia("(prefers-reduced-motion: reduce)");
+    const update = () => setSystemMotion(media.matches);
+    media.addEventListener("change", update);
+    return () => media.removeEventListener("change", update);
+  }, []);
   const [busy, setBusy] = useState(false);
   const [revision, setRevision] = useState(0);
   const [working, setWorking] = useState(Boolean(id));
@@ -117,7 +132,12 @@ export default function App() {
   const [error, setError] = useState("");
   const [storageOK, setStorageOK] = useState(true);
   const [selected, setSelected] = useState<Side | null>(null);
-  const [ambition, setAmbition] = useState<Side>(0);
+  const [creation, setCreation] = useState<CreationProgress | null>(null);
+  const [checking, setChecking] = useState(false);
+  const [lookup, setLookup] = useState<{
+    matches: CampaignMatch[];
+    unavailable?: boolean;
+  } | null>(null);
   const [dialog, setDialog] = useState<
     "menu" | "chronicle" | "world" | "help" | null
   >(null);
@@ -181,6 +201,7 @@ export default function App() {
     gameRef.current = data.game;
     setGame(data.game);
     setBusy(data.busy);
+    setCreation(data.creation ?? null);
     setError(
       data.error ||
         (!data.game && !data.busy
@@ -216,23 +237,53 @@ export default function App() {
     window.scrollTo({ top: 0, behavior: "instant" });
   }, [id, game?.phase, game?.reign.number, Boolean(game?.reign.ended)]);
 
-  async function create() {
+  async function findWorlds() {
+    if (lock.current || prompt.trim().length < 5) return;
+    lock.current = true;
+    setChecking(true);
+    setError("");
+    try {
+      await ensureSession();
+      const result = await api<{
+        matches: CampaignMatch[];
+        unavailable?: boolean;
+      }>("/api/campaigns/match", { prompt: prompt.trim() });
+      setLookup(result);
+      lock.current = false;
+      if (!result.matches.length && !result.unavailable) await create();
+    } catch (cause) {
+      setError((cause as Error).message);
+    } finally {
+      lock.current = false;
+      setChecking(false);
+    }
+  }
+  async function create(campaignId?: string) {
     const setting = prompt.trim();
     if (setting.length < 5 || lock.current) return;
-    const pending = saves.find(
-      (s) => s.prompt === setting && s.name === "A republic taking shape",
-    );
-    const target = pending?.id || crypto.randomUUID();
+    const pending =
+      !campaignId &&
+      saves.find(
+        (s) => s.prompt === setting && s.name === "A republic taking shape",
+      );
+    const target = (pending && pending.id) || crypto.randomUUID();
     switchId(target);
     remember({ id: target, prompt: setting, name: "A republic taking shape" });
     setGame(null);
+    setCreation(null);
     setError("");
     setWorking(true);
     setBusy(false);
     lock.current = true;
     try {
       await ensureSession();
-      accept(await api("/api/games", { id: target, prompt: setting }), target);
+      const body = {
+        id: target,
+        prompt: setting,
+        ...(campaignId ? { campaignId } : {}),
+      };
+      write(`swipe-republic:creation:${target}`, body);
+      accept(await api("/api/games", body), target);
     } catch (cause) {
       if (active.current === target) setError((cause as Error).message);
     } finally {
@@ -269,7 +320,11 @@ export default function App() {
     }
   }
   async function retry() {
-    if (!id || lock.current) return;
+    if (lock.current) return;
+    if (!id) {
+      await findWorlds();
+      return;
+    }
     const target = id;
     lock.current = true;
     setWorking(true);
@@ -281,7 +336,13 @@ export default function App() {
         data = await api(`/api/games/${target}`);
       } catch (cause) {
         if (save?.name !== "A republic taking shape") throw cause;
-        data = await api("/api/games", { id: target, prompt: save.prompt });
+        data = await api(
+          "/api/games",
+          read(`swipe-republic:creation:${target}`, {
+            id: target,
+            prompt: save.prompt,
+          }),
+        );
       }
       const action = read<Action | null>(
         `swipe-republic:action:${target}`,
@@ -294,13 +355,20 @@ export default function App() {
       }
       if (!data.busy && !data.game && save) {
         await ensureSession();
-        data = await api("/api/games", { id: target, prompt: save.prompt });
+        data = await api(
+          "/api/games",
+          read(`swipe-republic:creation:${target}`, {
+            id: target,
+            prompt: save.prompt,
+          }),
+        );
       }
       if (
         !data.busy &&
-        data.game?.phase === "playing" &&
-        !data.game.card &&
-        !data.game.reign.ended
+        (data.creation ||
+          (data.game?.phase === "playing" &&
+            !data.game.card &&
+            !data.game.reign.ended))
       )
         data = await api(`/api/games/${target}/prepare`, {});
       accept(data, target);
@@ -313,22 +381,32 @@ export default function App() {
   }
 
   useEffect(() => {
-    if (!id || working || error || !busy || game?.card || game?.reign.ended)
+    if (
+      !id ||
+      working ||
+      error ||
+      !busy ||
+      (game?.card && !creation) ||
+      game?.reign.ended
+    )
       return;
     let cancelled = false;
-    const timer = setTimeout(async () => {
-      try {
-        const data = await api(`/api/games/${id}`);
-        if (!cancelled) accept(data, id);
-      } catch (cause) {
-        if (!cancelled) setError((cause as Error).message);
-      }
-    }, 1100);
+    const timer = setTimeout(
+      async () => {
+        try {
+          const data = await api(`/api/games/${id}`);
+          if (!cancelled) accept(data, id);
+        } catch (cause) {
+          if (!cancelled) setError((cause as Error).message);
+        }
+      },
+      creation ? 2200 : 1100,
+    );
     return () => {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [id, busy, game, working, error, revision]);
+  }, [id, busy, game, working, error, revision, creation]);
 
   useEffect(() => {
     if (
@@ -366,9 +444,19 @@ export default function App() {
   }, [game, busy, working, error]);
 
   function choose(side: Side) {
-    if (!game?.card || working || lock.current || departure) return;
+    if (
+      !game?.card ||
+      game.phase !== "playing" ||
+      working ||
+      lock.current ||
+      departure
+    )
+      return;
     setDeparture({ card: game.card, side });
-    departureTimer.current = setTimeout(() => setDeparture(null), 240);
+    departureTimer.current = setTimeout(
+      () => setDeparture(null),
+      reducedMotion ? 0 : 360,
+    );
     void mutate("choose", { cardId: game.card.id, side });
   }
   function closeDialog() {
@@ -392,6 +480,7 @@ export default function App() {
       if (
         dialog ||
         !game?.card ||
+        game.phase !== "playing" ||
         working ||
         event.ctrlKey ||
         event.metaKey ||
@@ -429,10 +518,11 @@ export default function App() {
     setSelected(null);
     setDialog(null);
     setDeparture(null);
+    setCreation(null);
+    setLookup(null);
   };
   const latest = game?.history.at(-1);
   const last = latest?.reign === game?.reign.number ? latest : undefined;
-  const currentAmbition = game?.world.ambitions[game.reign.ambition];
   const card = departure?.card ?? game?.card;
   const character = game && card ? game.world.characters[card.character] : null;
   const reactions = card && selected !== null ? card.reactions[selected] : null;
@@ -441,25 +531,6 @@ export default function App() {
   );
   const loading = working || busy;
   const pressure = game ? Math.min(...game.reign.support) : 50;
-  const ambitions = game && (
-    <fieldset className="ambition-options">
-      <legend>Choose your aim</legend>
-      {game.world.ambitions.map((a, i) => (
-        <label key={a.name}>
-          <input
-            type="radio"
-            name="ambition"
-            checked={ambition === i}
-            onChange={() => setAmbition(i as Side)}
-          />
-          <span>
-            <strong>{a.name}</strong>
-            {ambition === i && <span>{a.description}</span>}
-          </span>
-        </label>
-      ))}
-    </fieldset>
-  );
   const commitments = game && (
     <div className="commitments">
       {game.commitments.length ? (
@@ -489,12 +560,27 @@ export default function App() {
       data-tone={game?.world.tone ?? "earth"}
       data-pressure={pressure <= 20 ? "critical" : "steady"}
       data-ended={game?.reign.ended?.kind}
+      data-phase={game?.phase ?? "welcome"}
+      data-motion={reducedMotion ? "reduced" : "full"}
     >
+      {game?.nextPortrait && (
+        <link rel="preload" as="image" href={game.nextPortrait} />
+      )}
+      {game?.world.art?.background && (
+        <div
+          className="world-scene"
+          key={`${game.id}-scene`}
+          aria-hidden="true"
+        >
+          <img src={game.world.art.background} alt="" fetchPriority="high" />
+        </div>
+      )}
+      <div className="world-vignette" aria-hidden="true" />
       <header className="masthead">
         <button
           className="wordmark"
           onClick={newSociety}
-          disabled={working}
+          disabled={working || checking}
           aria-label="Swipe Republic, saved societies"
         >
           Swipe Republic
@@ -519,51 +605,95 @@ export default function App() {
 
       {!id && (
         <main className="welcome">
-          <h1>Where will you rule?</h1>
-          <form
-            onSubmit={(event) => {
-              event.preventDefault();
-              void create();
-            }}
-          >
-            <label htmlFor="setting">Describe your world</label>
-            <textarea
-              id="setting"
-              value={prompt}
-              onChange={(event) => setPrompt(event.target.value)}
-              minLength={5}
-              maxLength={400}
-              placeholder="Egypt, 2011. Or a colony on Mars…"
-              rows={3}
-              required
-            />
-            <div className="examples">
-              {[
-                "Arab Spring, 2011 Egypt",
-                "Future 1 AE Mars colony",
-                "A forest republic ruled by animals",
-              ].map((example, i) => (
+          <h1>
+            {lookup
+              ? lookup.matches.length
+                ? "A familiar world?"
+                : "Create your world"
+              : "Where will you rule?"}
+          </h1>
+          {!lookup && (
+            <form
+              onSubmit={(event) => {
+                event.preventDefault();
+                void findWorlds();
+              }}
+            >
+              <label htmlFor="setting">Describe your world</label>
+              <textarea
+                id="setting"
+                value={prompt}
+                onChange={(event) => {
+                  setPrompt(event.target.value);
+                  setLookup(null);
+                }}
+                disabled={checking}
+                minLength={5}
+                maxLength={400}
+                placeholder="Egypt, 2011. Or a colony on Mars…"
+                rows={3}
+                required
+              />
+              <button
+                className="primary begin"
+                disabled={prompt.trim().length < 5 || checking}
+              >
+                {checking ? "Looking for similar worlds…" : "Begin"}
+              </button>
+            </form>
+          )}
+          {lookup && (
+            <section
+              className="campaign-matches"
+              aria-label="Similar societies"
+            >
+              <p>
+                {lookup.unavailable
+                  ? "We couldn't check saved societies. You can still create your own."
+                  : "These societies are already ready. Your reign starts fresh."}
+              </p>
+              {lookup.matches.map((match) => (
                 <button
-                  type="button"
-                  key={example}
-                  onClick={() => setPrompt(example)}
+                  className="campaign-match"
+                  key={match.id}
+                  disabled={working || checking}
+                  onClick={() => void create(match.id)}
                 >
-                  {["Egypt", "Mars", "Animal kingdom"][i]}
+                  <span>
+                    <strong>{match.name}</strong>
+                    <span>
+                      {match.era} · {match.similarity}% similar
+                    </span>
+                    <span>{match.summary}</span>
+                  </span>
+                  <span aria-hidden="true">→</span>
                 </button>
               ))}
-            </div>
-            <button
-              className="primary begin"
-              disabled={prompt.trim().length < 5}
-            >
-              Begin
-            </button>
-          </form>
+              <button
+                className="primary begin"
+                disabled={working || checking}
+                onClick={() => void create()}
+              >
+                Create my own world →
+              </button>
+              <button
+                className="text-button"
+                disabled={working || checking}
+                onClick={() => setLookup(null)}
+              >
+                ← Change setting
+              </button>
+            </section>
+          )}
           {saves.length > 0 && (
             <details className="saves">
               <summary>Saved games ({saves.length})</summary>
               {saves.map((save) => (
-                <button key={save.id} onClick={() => void resume(save.id)}>
+                <button
+                  key={save.id}
+                  disabled={checking}
+                  onClick={() => void resume(save.id)}
+                >
                   {save.name}
                   <span aria-hidden="true">→</span>
                 </button>
@@ -587,29 +717,20 @@ export default function App() {
           <h1>{loading ? "Opening your world…" : "Your game is saved."}</h1>
           <p>
             {loading
-              ? "This can take up to a minute."
+              ? "Your society comes first. Its people and artwork follow."
               : "Try again to continue."}
           </p>
         </main>
       )}
 
       {game?.phase === "intro" && (
-        <main className="introduction">
-          <p className="setting-line">{game.world.era}</p>
-          <h1>{game.world.name}</h1>
-          <p className="role-line">You are {game.world.role}.</p>
-          {ambitions}
-          <button
-            className="primary begin"
-            disabled={working}
-            onClick={() => void mutate("start", { ambition })}
-          >
-            {working ? "Taking office…" : "Take office"}
-          </button>
-          <button className="text-button" onClick={() => showWorld()}>
-            Meet your society
-          </button>
-        </main>
+        <WorldArrival
+          key={`${game.id}-arrival`}
+          world={game.world}
+          creation={creation}
+          working={working}
+          onStart={() => void mutate("start")}
+        />
       )}
 
       {game?.phase === "playing" && !game.reign.ended && (
@@ -637,7 +758,10 @@ export default function App() {
                   >
                     <Icon index={i} />
                     <span className="support-number">
-                      <AnimatedNumber value={value} />
+                      <AnimatedNumber
+                        value={value}
+                        reducedMotion={reducedMotion}
+                      />
                       {reaction ? (
                         <span
                           className={`reaction ${reaction.delta < 0 ? "negative" : ""}`}
@@ -676,28 +800,42 @@ export default function App() {
             </div>
             {card ? (
               <>
-                <DecisionCard
-                  key={card.id}
-                  card={card}
-                  character={character!}
-                  tone={game.world.tone}
-                  selected={selected}
-                  working={working}
-                  leaving={departure?.side ?? null}
-                  onSelect={setSelected}
-                  onChoose={choose}
-                />
+                <div className="decision-stage">
+                  {game.card &&
+                    departure &&
+                    game.card.id !== departure.card.id && (
+                      <DecisionCard
+                        key={game.card.id}
+                        card={game.card}
+                        character={game.world.characters[game.card.character]!}
+                        tone={game.world.tone}
+                        image={
+                          game.world.art?.[`portrait-${game.card.character}`]
+                        }
+                        selected={null}
+                        working={true}
+                        leaving={null}
+                        onSelect={() => {}}
+                        onChoose={() => {}}
+                      />
+                    )}
+                  <DecisionCard
+                    key={card.id}
+                    card={card}
+                    character={character!}
+                    tone={game.world.tone}
+                    image={game.world.art?.[`portrait-${card.character}`]}
+                    selected={selected}
+                    working={working}
+                    leaving={departure?.side ?? null}
+                    onSelect={setSelected}
+                    onChoose={choose}
+                  />
+                </div>
                 <div className="decision-hint" aria-live="polite">
                   {doomed ? (
                     <span className="danger-warning">
                       This could end your reign.
-                    </span>
-                  ) : selected !== null ? (
-                    <span>
-                      {card.options[selected].advances &&
-                      game.reign.progress < AMBITION_TARGET
-                        ? "Helps your aim"
-                        : ""}
                     </span>
                   ) : game.reign.turn === 0 ? (
                     <span>Swipe or choose. Keep every faction above zero.</span>
@@ -724,16 +862,6 @@ export default function App() {
                 Saving is unavailable. Keep this tab open.
               </p>
             )}
-            {game.reign.progress >= AMBITION_TARGET &&
-              game.reign.turn >= RETIRE_TURN && (
-                <button
-                  className="retire-button"
-                  disabled={working}
-                  onClick={() => void mutate("retire")}
-                >
-                  Hand over power
-                </button>
-              )}
           </section>
         </main>
       )}
@@ -748,7 +876,7 @@ export default function App() {
           </p>
           <h1>{game.reign.ended.title}</h1>
           <p className="ending-reason">{game.reign.ended.reason}</p>
-          {game.reign.number < 5 ? (
+          {
             <section className="succession">
               <h2>Who rules next?</h2>
               <div className="successor-options">
@@ -756,9 +884,7 @@ export default function App() {
                   <button
                     key={c}
                     disabled={working}
-                    onClick={() =>
-                      void mutate("succeed", { coalition: c, ambition })
-                    }
+                    onClick={() => void mutate("succeed", { coalition: c })}
                   >
                     <Icon index={c === 0 ? 0 : 2} />
                     <span>{game.world.factions[c === 0 ? 0 : 2].name}</span>
@@ -766,16 +892,8 @@ export default function App() {
                   </button>
                 ))}
               </div>
-              <details className="next-ambition">
-                <summary>Change your aim</summary>
-                {ambitions}
-              </details>
             </section>
-          ) : (
-            <button className="primary begin" onClick={newSociety}>
-              Start another society
-            </button>
-          )}
+          }
           <button
             className="text-button"
             onClick={() => setDialog("chronicle")}
@@ -840,7 +958,16 @@ export default function App() {
                 <button onClick={() => setDialog("help")}>
                   How to play<span>→</span>
                 </button>
-                <button disabled={working} onClick={newSociety}>
+                <button
+                  aria-pressed={reducedMotion}
+                  onClick={() => {
+                    setMotionPreference(!reducedMotion);
+                    write("swipe-republic:reduced-motion", !reducedMotion);
+                  }}
+                >
+                  Reduce motion<span>{reducedMotion ? "On" : "Off"}</span>
+                </button>
+                <button disabled={working || checking} onClick={newSociety}>
                   Saved games<span>→</span>
                 </button>
               </nav>
@@ -865,9 +992,8 @@ export default function App() {
                     also work.
                   </p>
                   <p>
-                    Make {AMBITION_TARGET} choices toward your aim and survive{" "}
-                    {RETIRE_TURN} decisions to retire. A term ends at{" "}
-                    {MAX_TURNS} decisions. Each society has five reigns.
+                    Your reign lasts until a faction reaches zero. A successor
+                    inherits your laws and unfinished promises.
                   </p>
                   <p>
                     Arrows preview a change. A question mark means the judgment
@@ -896,16 +1022,6 @@ export default function App() {
                   ))}
                 </div>
                 <details>
-                  <summary>
-                    Your aim · {game.reign.progress}/{AMBITION_TARGET}
-                  </summary>
-                  <h3>{currentAmbition?.name}</h3>
-                  <p>{currentAmbition?.description}</p>
-                  <p className="quiet">
-                    Retirement after {RETIRE_TURN} decisions.
-                  </p>
-                </details>
-                <details>
                   <summary>Promises ({game.commitments.length})</summary>
                   {commitments}
                 </details>
@@ -914,7 +1030,21 @@ export default function App() {
                   {game.legacies.map((l) => (
                     <p key={l}>{l}</p>
                   ))}
-                  <p>{game.world.resources.join(" · ")}</p>
+                  <div className="arrival-resources">
+                    {game.world.resources.map((name, i) => (
+                      <span key={name}>
+                        {game.world.art?.[`resource-${i}`] && (
+                          <img
+                            src={game.world.art[`resource-${i}`]}
+                            alt=""
+                            width="44"
+                            height="44"
+                          />
+                        )}
+                        {name}
+                      </span>
+                    ))}
+                  </div>
                 </details>
               </>
             )}

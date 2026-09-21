@@ -5,7 +5,6 @@ import {
   publicGame,
   play,
   succeed,
-  retire,
   nextDraft,
   type Game,
   type World,
@@ -13,8 +12,20 @@ import {
   type Draft,
 } from "../src/game";
 import { generateWorld, generateCards, scoreCards } from "./ai";
+import { ART_RESERVATION, artTasks, generateArt } from "./art";
+import {
+  candidates,
+  cloneCampaign,
+  getCampaign,
+  matchCampaigns,
+  MATCH_RESERVATION,
+  publishCampaign,
+  type Template,
+} from "./campaigns";
 
 type Bindings = {
+  CAMPAIGNS: D1Database;
+  ART: R2Bucket;
   SOCIETIES: DurableObjectNamespace<Society>;
   BUDGET: DurableObjectNamespace<Budget>;
   REQUEST_LIMIT: RateLimit;
@@ -25,10 +36,11 @@ type Bindings = {
 type Lease = {
   token: string;
   until: number;
-  kind: "world" | "cards" | "callback";
+  kind: "world" | "cards" | "callback" | "art";
   reign: number;
   commitmentId?: string;
   draft?: Draft;
+  reserved?: number;
 };
 type Save = {
   id: string;
@@ -41,6 +53,10 @@ type Save = {
   spent: number;
   attempts: number;
   settled?: string[];
+  reservations?: Record<string, number>;
+  queued?: boolean;
+  visitor?: string;
+  foundation?: { templateId: string; visitor: string; complete: boolean };
 };
 const uuid = z.string().uuid();
 const mutationSchema = z.object({
@@ -51,10 +67,7 @@ const choiceSchema = mutationSchema.extend({
   cardId: uuid,
   side: z.union([z.literal(0), z.literal(1)]),
 });
-const startSchema = mutationSchema.extend({
-  ambition: z.union([z.literal(0), z.literal(1)]),
-});
-const successorSchema = startSchema.extend({
+const successorSchema = mutationSchema.extend({
   coalition: z.union([z.literal(0), z.literal(1)]),
 });
 
@@ -74,32 +87,75 @@ export class Society extends DurableObject<Bindings> {
   private async persist() {
     await this.ctx.storage.put("save", this.save);
   }
-  async initialize(owner: string, id: string, prompt: string) {
+  async initialize(
+    owner: string,
+    id: string,
+    prompt: string,
+    visitor: string,
+    template?: Template,
+  ) {
     if (this.save) {
-      this.own(owner);
+      const existing = this.own(owner);
+      if (!existing.game && !existing.foundation) {
+        existing.foundation = {
+          templateId: crypto.randomUUID(),
+          visitor,
+          complete: false,
+        };
+        existing.error = null;
+        await this.persist();
+        await this.ctx.storage.setAlarm(Date.now() + 100);
+      }
       return;
     }
     this.save = {
       id,
       owner,
       prompt,
-      game: null,
+      game: template ? cloneCampaign(id, prompt, template) : null,
       lease: null,
       error: null,
       requests: [],
       spent: 0,
       attempts: 0,
+      ...(!template
+        ? {
+            foundation: {
+              templateId: crypto.randomUUID(),
+              visitor,
+              complete: false,
+            },
+          }
+        : {}),
     };
     await this.persist();
+    if (!template) await this.ctx.storage.setAlarm(Date.now() + 100);
   }
   view(owner: string) {
     const s = this.own(owner);
-    const busy = !!s.lease && s.lease.until > Date.now();
+    const creating = !!s.foundation && !s.foundation.complete;
+    const busy =
+      (!!s.lease && s.lease.until > Date.now()) ||
+      ((creating || s.queued) && !s.error);
     return {
       id: s.id,
       game: s.game ? publicGame(s.game, busy) : null,
       busy,
-      error: s.game?.card ? null : s.error,
+      error: creating || !s.game?.card ? s.error : null,
+      creation: creating
+        ? {
+            done:
+              (s.game ? 1 : 0) +
+              Object.keys(s.game?.world.art ?? {}).length +
+              (s.game?.card ? 1 : 0),
+            total: 12,
+            stage: !s.game
+              ? "Shaping your society"
+              : Object.keys(s.game.world.art ?? {}).length < 10
+                ? "Painting your world"
+                : "Preparing your first visitor",
+          }
+        : null,
     };
   }
   async mutate(owner: string, operation: string, raw: unknown) {
@@ -115,18 +171,15 @@ export class Society extends DurableObject<Bindings> {
       const body = choiceSchema.parse(raw);
       s.game = play(s.game, body.cardId, body.side);
     } else if (operation === "start") {
-      const body = startSchema.parse(raw);
+      if (s.foundation && !s.foundation.complete)
+        throw new Error("Your society is still being prepared.");
       if (s.game.phase !== "intro")
         throw new Error("Your reign has already begun.");
       s.game.phase = "playing";
-      s.game.reign.ambition = body.ambition;
       s.game.version++;
     } else if (operation === "succeed") {
       const body = successorSchema.parse(raw);
-      s.game = succeed(s.game, body.coalition, body.ambition);
-      s.lease = null;
-    } else if (operation === "retire") {
-      s.game = retire(s.game);
+      s.game = succeed(s.game, body.coalition);
       s.lease = null;
     } else throw new Error("Unknown action");
     s.requests = [...s.requests, input.requestId].slice(-40);
@@ -138,7 +191,14 @@ export class Society extends DurableObject<Bindings> {
     const s = this.own(owner);
     if (s.lease && s.lease.until > Date.now()) return null;
     const g = s.game;
-    if (g && (g.phase !== "playing" || g.reign.ended)) return null;
+    if (g?.reign.ended) return null;
+    if (
+      g?.phase === "intro" &&
+      s.foundation &&
+      !s.foundation.complete &&
+      Object.keys(g.world.art ?? {}).length < 10
+    )
+      return null;
     if (g && !g.card) {
       const due = nextDraft(g);
       if (due && !due.commitmentId) {
@@ -148,7 +208,7 @@ export class Society extends DurableObject<Bindings> {
         return null;
       }
     }
-    if (g?.card && (!background || g.deck.length > 0)) return null;
+    if (g?.card && (!background || g.deck.length >= 2)) return null;
     if (g && !g.card && background) return null;
     const due = g && !g.card ? nextDraft(g) : null;
     const reserve = due?.commitmentId ? 0.002 : 0.015;
@@ -163,6 +223,7 @@ export class Society extends DurableObject<Bindings> {
       token: crypto.randomUUID(),
       until: Date.now() + 60000,
       kind: !g ? "world" : due?.commitmentId ? "callback" : "cards",
+      reserved: reserve,
       reign: g?.reign.number ?? 0,
       ...(due?.commitmentId
         ? { commitmentId: due.commitmentId, draft: due.draft }
@@ -171,19 +232,32 @@ export class Society extends DurableObject<Bindings> {
     s.lease = lease;
     s.error = null;
     await this.persist();
+    await this.ctx.storage.setAlarm(lease.until + 100);
     return { lease, prompt: s.prompt, game: g };
   }
   async allocated(owner: string, token: string) {
     const s = this.own(owner);
     if (s.lease?.token !== token) return false;
-    s.attempts++;
+    const reservations = (s.reservations ??= {});
+    if (!(token in reservations)) {
+      reservations[token] =
+        s.lease.reserved ?? (s.lease.kind === "callback" ? 0.002 : 0.015);
+      s.spent += reservations[token];
+      s.attempts++;
+    }
     await this.persist();
     return true;
   }
   async finish(
     owner: string,
     token: string,
-    payload: { world?: World; cards?: Card[]; cost: number; error?: string },
+    payload: {
+      world?: World;
+      cards?: Card[];
+      art?: Record<string, string>;
+      cost: number;
+      error?: string;
+    },
   ) {
     const s = this.own(owner);
     if (s.settled?.includes(token)) {
@@ -191,13 +265,18 @@ export class Society extends DurableObject<Bindings> {
       return;
     }
     s.settled = [...(s.settled ?? []), token].slice(-256);
-    s.spent += payload.cost;
+    s.spent += payload.cost - (s.reservations?.[token] ?? 0);
+    if (s.reservations) delete s.reservations[token];
     if (s.lease?.token !== token) {
       await this.persist();
       return;
     }
     const lease = s.lease;
     s.lease = null;
+    if (payload.art && s.game) {
+      s.game.world.art = { ...s.game.world.art, ...payload.art };
+      s.game.version++;
+    }
     if (payload.error) s.error = payload.error;
     else if (payload.world && !s.game)
       s.game = freshGame(s.id, s.prompt, payload.world);
@@ -227,6 +306,156 @@ export class Society extends DurableObject<Bindings> {
     }
     await this.persist();
   }
+  async continueFoundation(owner: string) {
+    const s = this.own(owner);
+    if (!s.foundation || s.foundation.complete) return false;
+    if (!s.lease || s.lease.until <= Date.now()) {
+      s.error = null;
+      await this.persist();
+      await this.ctx.storage.setAlarm(Date.now() + 100);
+    }
+    return true;
+  }
+  async queuePreparation(owner: string, visitor: string) {
+    const s = this.own(owner);
+    if (
+      !s.game ||
+      s.game.reign.ended ||
+      (s.foundation && !s.foundation.complete)
+    )
+      return;
+    if (s.game.card && s.game.deck.length >= 2) return;
+    s.queued = true;
+    s.visitor = visitor;
+    s.error = null;
+    await this.persist();
+    await this.ctx.storage.setAlarm(
+      s.lease && s.lease.until > Date.now()
+        ? s.lease.until + 100
+        : Date.now() + 100,
+    );
+  }
+  async alarm() {
+    const s = this.save;
+    if (!s || s.error) return;
+    if (s.lease && s.lease.until > Date.now()) {
+      await this.ctx.storage.setAlarm(s.lease.until + 100);
+      return;
+    }
+    if (!s.foundation || s.foundation.complete) {
+      if (!s.queued || !s.visitor) return;
+      try {
+        await prepare(this.env, this, s.owner, s.visitor, !!s.game?.card);
+      } catch (error) {
+        s.error = /allowance/.test((error as Error).message)
+          ? (error as Error).message
+          : "The next visitor could not be prepared. Please retry.";
+      }
+      s.queued = false;
+      await this.persist();
+      if (!s.error && s.game && !s.game.card && !s.game.reign.ended)
+        await this.queuePreparation(s.owner, s.visitor);
+      return;
+    }
+    try {
+      if (!s.game) {
+        await prepare(this.env, this, s.owner, s.foundation.visitor);
+      } else {
+        const missing = artTasks(s.game.world)
+          .filter((task) => !s.game!.world.art?.[task.slot])
+          .slice(0, 5);
+        if (missing.length) {
+          const reserved = missing.length * ART_RESERVATION;
+          if (
+            s.spent + reserved > Number(this.env.GAME_AI_BUDGET) ||
+            s.attempts >= 100
+          )
+            throw new Error(
+              "This society has reached its AI allowance. Your progress is saved.",
+            );
+          const token = crypto.randomUUID();
+          s.lease = {
+            token,
+            until: Date.now() + 120000,
+            kind: "art",
+            reign: 1,
+            reserved,
+          };
+          await this.persist();
+          await this.ctx.storage.setAlarm(s.lease.until + 100);
+          const budget = this.env.BUDGET.getByName(
+            new Date().toISOString().slice(0, 10),
+          );
+          let allocated = false;
+          let cost = 0;
+          const art: Record<string, string> = {};
+          try {
+            await budget.reserve(s.foundation.visitor, token, false, reserved);
+            allocated = true;
+            await this.allocated(s.owner, token);
+            const outcomes = await Promise.allSettled(
+              missing.map(async (task) => {
+                const key = `${s.foundation!.templateId}/${task.slot}`;
+                const existing = await this.env.ART.head(key);
+                if (!existing) {
+                  const result = await generateArt(
+                    this.env.OPENROUTER_API_KEY,
+                    task,
+                  );
+                  cost += result.cost;
+                  await this.env.ART.put(key, result.bytes, {
+                    httpMetadata: {
+                      contentType: result.contentType,
+                      cacheControl: "public, max-age=31536000, immutable",
+                    },
+                  });
+                }
+                art[task.slot] = `/api/art/${key}`;
+              }),
+            );
+            if (outcomes.some((r) => r.status === "rejected")) {
+              // Unknown provider outcomes retain their reservation; successful images stay saved.
+              cost = Math.max(cost, reserved);
+              throw new Error(
+                "Some artwork could not be prepared. Retry to finish the missing images.",
+              );
+            }
+            await this.finish(s.owner, token, { art, cost });
+          } catch (error) {
+            if (allocated && cost === 0) cost = reserved;
+            await this.finish(s.owner, token, {
+              art,
+              cost,
+              error: allocated
+                ? "Some artwork could not be prepared. Retry to finish the missing images."
+                : (error as Error).message,
+            });
+          } finally {
+            if (allocated) await budget.settle(token, cost);
+          }
+        } else if (!s.game.card) {
+          await prepare(this.env, this, s.owner, s.foundation.visitor);
+        } else {
+          await publishCampaign(
+            this.env.CAMPAIGNS,
+            s.foundation.templateId,
+            s.game.world,
+            [s.game.card, ...s.game.deck],
+          );
+          s.foundation.complete = true;
+          s.game.version++;
+          await this.persist();
+        }
+      }
+      if (!s.error && !s.foundation.complete)
+        await this.ctx.storage.setAlarm(Date.now() + 100);
+    } catch (error) {
+      s.error = /allowance/.test((error as Error).message)
+        ? (error as Error).message
+        : "Your world could not be finished. Retry to continue from the last saved step.";
+      await this.persist();
+    }
+  }
 }
 
 type Ledger = {
@@ -234,6 +463,7 @@ type Ledger = {
   reservations: Record<string, number>;
   visitors: Record<string, { calls: number; worlds: number }>;
   creations?: Record<string, string>;
+  reuses?: Record<string, string>;
 };
 export class Budget extends DurableObject<Bindings> {
   private ledger: Ledger = { spent: 0, reservations: {}, visitors: {} };
@@ -243,16 +473,20 @@ export class Budget extends DurableObject<Bindings> {
       this.ledger = (await ctx.storage.get<Ledger>("ledger")) ?? this.ledger;
     });
   }
-  async admitWorld(visitor: string, id: string) {
-    const creations = (this.ledger.creations ??= {});
+  async admitWorld(visitor: string, id: string, reuse = false) {
+    const creations = reuse
+      ? (this.ledger.reuses ??= {})
+      : (this.ledger.creations ??= {});
     if (creations[id]) return;
     const visitors = Object.values(creations);
     if (
-      visitors.length >= 100 ||
-      visitors.filter((v) => v === visitor).length >= 4
+      visitors.length >= (reuse ? 200 : 100) ||
+      visitors.filter((v) => v === visitor).length >= (reuse ? 20 : 4)
     )
       throw new Error(
-        "Today’s new-society allowance is used. Existing societies remain available; try again tomorrow.",
+        reuse
+          ? "Today’s saved-campaign allowance is used. Resume an existing reign or try again tomorrow."
+          : "Today’s new-society allowance is used. Existing societies remain available; try again tomorrow.",
       );
     creations[id] = visitor;
     await this.ctx.storage.put("ledger", this.ledger);
@@ -266,6 +500,7 @@ export class Budget extends DurableObject<Bindings> {
     amount: number,
   ) {
     const l = this.ledger;
+    if (token in l.reservations) return;
     const v = l.visitors[visitor] ?? { calls: 0, worlds: 0 };
     if (v.calls >= 180 || (world && v.worlds >= 4))
       throw new Error(
@@ -297,7 +532,7 @@ export class Budget extends DurableObject<Bindings> {
 
 async function prepare(
   env: Bindings,
-  stub: DurableObjectStub<Society>,
+  stub: Pick<Society, "acquire" | "allocated" | "finish">,
   owner: string,
   visitor: string,
   background = false,
@@ -379,7 +614,28 @@ export default {
       Response.json(body, { status, headers });
     try {
       if (url.pathname === "/api/health")
-        return json({ status: "ok", version: 1 });
+        return json({ status: "ok", version: 2 });
+      const asset = url.pathname.match(
+        /^\/api\/art\/([0-9a-f-]{36})\/(background|portrait-[0-5]|resource-[0-2])$/,
+      );
+      if (asset && request.method === "GET") {
+        const cacheKey = new Request(`${url.origin}${url.pathname}`);
+        const cache = await caches.open("world-art");
+        const cached = await cache.match(cacheKey);
+        if (cached) return cached;
+        const object = await env.ART.get(`${asset[1]}/${asset[2]}`);
+        if (!object) return json({ error: "Not found" }, 404);
+        const response = new Response(object.body, {
+          headers: {
+            "Content-Type": object.httpMetadata?.contentType ?? "image/webp",
+            "Cache-Control": "public, max-age=31536000, immutable",
+            ETag: object.httpEtag,
+            "X-Content-Type-Options": "nosniff",
+          },
+        });
+        ctx.waitUntil(cache.put(cacheKey, response.clone()));
+        return response;
+      }
       if (
         !(
           await env.REQUEST_LIMIT.limit({
@@ -410,9 +666,11 @@ export default {
           return json({ error: "Request too large" }, 413);
       }
       const path = url.pathname.match(
-        /^\/api\/games(?:\/([0-9a-f-]{36})(?:\/(start|choose|prepare|succeed|retire))?)?$/,
+        /^\/api\/games(?:\/([0-9a-f-]{36})(?:\/(start|choose|prepare|succeed))?)?$/,
       );
-      if (!path) return json({ error: "Not found" }, 404);
+      const lookup =
+        url.pathname === "/api/campaigns/match" && request.method === "POST";
+      if (!path && !lookup) return json({ error: "Not found" }, 404);
       const visitorBytes = await crypto.subtle.digest(
         "SHA-256",
         new TextEncoder().encode(
@@ -443,16 +701,66 @@ export default {
         text += decoder.decode();
         raw = JSON.parse(text);
       }
+      if (lookup) {
+        const { prompt } = z
+          .object({ prompt: z.string().trim().min(5).max(400) })
+          .parse(raw);
+        const entries = await candidates(env.CAMPAIGNS, prompt);
+        if (!entries.length) return json({ matches: [] });
+        const token = crypto.randomUUID();
+        const budget = env.BUDGET.getByName(
+          new Date().toISOString().slice(0, 10),
+        );
+        let reserved = false;
+        let cost = MATCH_RESERVATION;
+        try {
+          await budget.reserve(visitor, token, false, MATCH_RESERVATION);
+          reserved = true;
+          const result = await matchCampaigns(
+            env.OPENROUTER_API_KEY,
+            prompt,
+            entries,
+          );
+          cost = result.cost;
+          return json({ matches: result.matches });
+        } catch {
+          return json({ matches: [], unavailable: true });
+        } finally {
+          if (reserved) await budget.settle(token, cost);
+        }
+      }
+      if (!path) return json({ error: "Not found" }, 404);
       if (!path[1] && request.method === "POST") {
         const body = z
-          .object({ id: uuid, prompt: z.string().trim().min(5).max(400) })
+          .object({
+            id: uuid,
+            prompt: z.string().trim().min(5).max(400),
+            campaignId: uuid.optional(),
+          })
           .parse(raw);
+        const template = body.campaignId
+          ? await getCampaign(env.CAMPAIGNS, body.campaignId)
+          : undefined;
+        if (body.campaignId && !template)
+          return json(
+            {
+              error:
+                "That society is no longer available. Create a new world instead.",
+            },
+            404,
+          );
         await env.BUDGET.getByName(
           new Date().toISOString().slice(0, 10),
-        ).admitWorld(visitor, body.id);
+        ).admitWorld(visitor, body.id, !!template);
         const stub = env.SOCIETIES.getByName(body.id);
-        await stub.initialize(session, body.id, body.prompt);
-        await prepare(env, stub, session, visitor);
+        await stub.initialize(
+          session,
+          body.id,
+          body.prompt,
+          visitor,
+          template ?? undefined,
+        );
+        await stub.continueFoundation(session);
         return json(await stub.view(session));
       }
       if (!path[1]) return json({ error: "Not found" }, 404);
@@ -460,24 +768,25 @@ export default {
       const stub = env.SOCIETIES.getByName(id);
       if (request.method === "GET" && !path[2]) {
         const state = await stub.view(session);
-        if (state.game?.card && !state.busy)
-          ctx.waitUntil(
-            prepare(env, stub, session, visitor, true).catch(() => {}),
-          );
-        return json(state);
+        if (state.game?.card && !state.busy && !state.creation)
+          await stub.queuePreparation(session, visitor);
+        return json(await stub.view(session));
       }
       if (request.method !== "POST" || !path[2])
         return json({ error: "Not found" }, 404);
       if (path[2] === "prepare") {
-        await prepare(env, stub, session, visitor);
+        if (await stub.continueFoundation(session))
+          return json(await stub.view(session));
+        await stub.queuePreparation(session, visitor);
         const state = await stub.view(session);
-        if (state.game?.card && !state.busy)
-          ctx.waitUntil(
-            prepare(env, stub, session, visitor, true).catch(() => {}),
-          );
-        return json(state);
+        if (state.game?.card && !state.busy && !state.creation)
+          await stub.queuePreparation(session, visitor);
+        return json(await stub.view(session));
       }
-      return json(await stub.mutate(session, path[2], raw));
+      const state = await stub.mutate(session, path[2], raw);
+      if (!state.game?.reign.ended && !state.busy)
+        await stub.queuePreparation(session, visitor);
+      return json(await stub.view(session));
     } catch (error) {
       if (error instanceof z.ZodError || error instanceof SyntaxError)
         return json({ error: "Please check the request and try again." }, 400);

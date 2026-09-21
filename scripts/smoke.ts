@@ -26,12 +26,22 @@ if (mode === "create") {
   await request("/api/health");
   await persist();
   const t = Date.now();
-  const r = await request("/api/games", {
+  let r = await request("/api/games", {
     id: saved.id,
     prompt:
       "Arab Spring 2011 Egypt. A fictional caretaker council; grounded political drama.",
   });
   assert.equal(r.status, 200);
+  while (!r.value.game || r.value.creation) {
+    assert.ok(!r.value.error, r.value.error);
+    assert.ok(
+      Date.now() - t < 300000,
+      "Preparation deadline; resume the saved society.",
+    );
+    await Bun.sleep(2200);
+    r = await request(`/api/games/${saved.id}`);
+    assert.equal(r.status, 200, r.value.error);
+  }
   assert.ok(r.value.game, r.value.error);
   saved.game = r.value.game;
   await persist();
@@ -46,7 +56,6 @@ if (mode === "create") {
   const r = await request(`/api/games/${saved.id}/start`, {
     requestId: crypto.randomUUID(),
     version: saved.game.version,
-    ambition: 0,
   });
   assert.equal(r.status, 200);
   saved.game = r.value.game;
@@ -96,10 +105,8 @@ if (mode === "create") {
       break;
     }
     const g = state.game;
-    const utilities = g.card.reactions.map(
-      (rs: any[], side: number) =>
-        Math.min(...rs.map((r, f) => g.reign.support[f] + r.delta)) * 3 +
-        (g.card.options[side].advances ? 5 : 0),
+    const utilities = g.card.reactions.map((rs: any[], side: number) =>
+      Math.min(...rs.map((r, f) => g.reign.support[f] + r.delta)),
     );
     const side = utilities[1] > utilities[0] ? 1 : 0;
     const body = {
@@ -121,7 +128,6 @@ if (mode === "create") {
         callback: !!g.card.commitmentId,
         waitMs: Date.now() - started,
         support: saved.game.reign.support,
-        progress: saved.game.reign.progress,
       }),
     );
     if (saved.game.reign.ended) {
@@ -129,22 +135,11 @@ if (mode === "create") {
       break;
     }
   }
-} else if (mode === "retire") {
-  const r = await request(`/api/games/${saved.id}/retire`, {
-    requestId: crypto.randomUUID(),
-    version: saved.game.version,
-  });
-  assert.equal(r.status, 200, JSON.stringify(r.value));
-  assert.equal(r.value.game.reign.ended.kind, "retired");
-  saved.game = r.value.game;
-  await persist();
-  console.log("Earned retirement: PASS");
 } else if (mode === "succeed") {
   const r = await request(`/api/games/${saved.id}/succeed`, {
     requestId: crypto.randomUUID(),
     version: saved.game.version,
     coalition: 1,
-    ambition: 1,
   });
   assert.equal(r.status, 200, JSON.stringify(r.value));
   assert.equal(r.value.game.reign.number, saved.game.reign.number + 1);

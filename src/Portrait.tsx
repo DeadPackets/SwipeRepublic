@@ -1,7 +1,7 @@
 import { memo } from "react";
 import type { World } from "./game";
 
-const appearances = {
+const appearances: Record<string, number> = {
   fox: 6,
   bird: 7,
   deer: 8,
@@ -16,7 +16,9 @@ export const Portrait = memo(function Portrait({
   tone = "earth",
   appearance = "human",
   portrait,
+  image,
 }: {
+  image?: string;
   character?: number;
   portrait?: number | null;
   tone?: World["tone"];
@@ -25,7 +27,19 @@ export const Portrait = memo(function Portrait({
   const tile =
     appearance === "human"
       ? (portrait ?? character) % 6
-      : appearances[appearance];
+      : (appearances[appearance] ?? character % 6);
+  if (image)
+    return (
+      <div className="portrait" aria-hidden="true">
+        <img
+          className="generated-portrait"
+          src={image}
+          alt=""
+          draggable={false}
+          decoding="async"
+        />
+      </div>
+    );
   return (
     <div className={`portrait portrait-${tone}`} aria-hidden="true">
       <div

@@ -1,6 +1,4 @@
 import { z } from "zod";
-import { MAX_TURNS, AMBITION_TARGET, RETIRE_TURN } from "./rules";
-export { MAX_TURNS, AMBITION_TARGET, RETIRE_TURN } from "./rules";
 
 const short = (max: number) => z.string().min(1).max(max);
 export const factionSchema = z.object({
@@ -25,29 +23,27 @@ export const worldSchema = z.object({
         role: short(50),
         faction: z.number().int().min(0).max(3),
         personality: short(120),
-        portrait: z.number().int().min(0).max(5).nullable(),
-        appearance: z.enum([
-          "human",
-          "fox",
-          "bird",
-          "deer",
-          "bear",
-          "beaver",
-          "robot",
-          "alien",
-        ]),
+        appearance: short(400),
       }),
     )
     .length(6),
-  ambitions: z
-    .array(z.object({ name: short(50), description: short(160) }))
-    .length(2),
+  artDirection: z.object({
+    scene: short(700),
+    palette: short(160),
+    identity: short(300),
+  }),
 });
-export type World = z.infer<typeof worldSchema>;
+type GeneratedWorld = z.infer<typeof worldSchema>;
+export type World = Omit<GeneratedWorld, "artDirection" | "characters"> & {
+  artDirection?: GeneratedWorld["artDirection"];
+  characters: (GeneratedWorld["characters"][number] & {
+    portrait?: number | null;
+  })[];
+  art?: Record<string, string>;
+};
 const actionSchema = z.object({
   label: short(55),
   consequence: short(180),
-  advances: z.boolean(),
 });
 export const promiseSchema = z.object({
   title: short(70),
@@ -80,7 +76,6 @@ export type Commitment = z.infer<typeof promiseSchema> & {
   due: number;
   character: number;
   source: string;
-  ambition: number;
 };
 export type Event = {
   turn: number;
@@ -89,23 +84,18 @@ export type Event = {
   action: string;
   consequence: string;
   deltas: number[];
-  advanced: boolean;
 };
 export type Ending = {
   kind: "fall" | "retired" | "term";
   title: string;
   reason: string;
   turn: number;
-  ambition: string;
-  progress: number;
   ruler: string;
 };
 export type Reign = {
   number: number;
   ruler: string;
   turn: number;
-  ambition: number;
-  progress: number;
   support: number[];
   ended: Ending | null;
 };
@@ -128,6 +118,7 @@ export type Game = {
 };
 export type PublicGame = Omit<Game, "deck" | "cost" | "generations"> & {
   preparing: boolean;
+  nextPortrait?: string;
 };
 export function freshGame(id: string, prompt: string, world: World): Game {
   return {
@@ -140,8 +131,6 @@ export function freshGame(id: string, prompt: string, world: World): Game {
       number: 1,
       ruler: world.role,
       turn: 0,
-      ambition: 0,
-      progress: 0,
       support: [50, 50, 50, 50],
       ended: null,
     },
@@ -162,8 +151,6 @@ function end(game: Game, kind: Ending["kind"], title: string, reason: string) {
     title,
     reason,
     turn: game.reign.turn,
-    ambition: game.world.ambitions[game.reign.ambition]!.name,
-    progress: game.reign.progress,
     ruler: game.reign.ruler,
   };
   game.reign.ended = ending;
@@ -190,10 +177,6 @@ export function play(game: Game, cardId: string, side: Side): Game {
   g.totalTurns++;
   g.reign.turn++;
   g.version++;
-  g.reign.progress = Math.min(
-    AMBITION_TARGET,
-    g.reign.progress + Number(option.advances),
-  );
   if (card.commitmentId)
     g.commitments = g.commitments.filter((p) => p.id !== card.commitmentId);
   if (option.promise && g.commitments.length < 3)
@@ -203,7 +186,6 @@ export function play(game: Game, cardId: string, side: Side): Game {
       due: g.totalTurns + option.promise.after,
       character: card.character,
       source: card.title,
-      ambition: g.reign.ambition,
     });
   if (option.legacy && !g.legacies.includes(option.legacy))
     g.legacies = [...g.legacies, option.legacy].slice(-3);
@@ -214,7 +196,6 @@ export function play(game: Game, cardId: string, side: Side): Game {
     action: option.label,
     consequence: option.consequence,
     deltas: g.reign.support.map((value, i) => value - game.reign.support[i]!),
-    advanced: g.reign.progress > game.reign.progress,
   });
   g.history = g.history.slice(-180);
   g.card = null;
@@ -235,23 +216,14 @@ export function play(game: Game, cardId: string, side: Side): Game {
       ][fallen[0]!.i]!,
       `${names} withdrew their support. ${option.consequence}`,
     );
-  } else if (g.reign.turn >= MAX_TURNS) {
-    end(
-      g,
-      "term",
-      g.reign.progress >= AMBITION_TARGET
-        ? "A successful term"
-        : "Your term has ended",
-      g.reign.progress >= AMBITION_TARGET
-        ? "You completed your ambition. The next ruler inherits your laws and unfinished promises."
-        : "You left office before completing your ambition. Your successor will take over.",
-    );
+  } else if (!nextDraft(g)?.commitmentId) {
+    g.card = g.deck.shift() ?? null;
   }
   return g;
 }
 
-export function succeed(game: Game, coalition: 0 | 1, ambition: 0 | 1): Game {
-  if (!game.reign.ended || game.reign.number >= 5)
+export function succeed(game: Game, coalition: 0 | 1): Game {
+  if (!game.reign.ended)
     throw new Error("This chronicle is complete. Begin another society.");
   const g = structuredClone(game);
   g.reign = {
@@ -261,34 +233,12 @@ export function succeed(game: Game, coalition: 0 | 1, ambition: 0 | 1): Game {
         ? `The ${g.world.factions[0]!.name} candidate`
         : `The ${g.world.factions[2]!.name} candidate`,
     turn: 0,
-    ambition,
-    progress: 0,
     support: coalition === 0 ? [65, 40, 40, 55] : [40, 55, 65, 40],
     ended: null,
   };
   g.version++;
   g.card = null;
   g.deck = [];
-  return g;
-}
-
-export function retire(game: Game): Game {
-  if (
-    game.reign.ended ||
-    game.reign.turn < RETIRE_TURN ||
-    game.reign.progress < AMBITION_TARGET
-  )
-    throw new Error(
-      "Complete your ambition and govern for 24 decisions before retiring.",
-    );
-  const g = structuredClone(game);
-  g.version++;
-  end(
-    g,
-    "retired",
-    "A peaceful handover",
-    "You completed your ambition and handed over power. Your laws and unfinished promises remain.",
-  );
   return g;
 }
 
@@ -306,7 +256,6 @@ export function nextDraft(
         kind: "major",
         options: [due.resolve, due.abandon].map((o) => ({
           ...o,
-          advances: o.advances && due.ambition === game.reign.ambition,
           legacy: null,
           promise: null,
         })),
@@ -322,5 +271,11 @@ export function publicGame(game: Game, preparing = false): PublicGame {
     generations: _generations,
     ...visible
   } = game;
-  return { ...visible, preparing };
+  return {
+    ...visible,
+    preparing,
+    nextPortrait: game.deck[0]
+      ? game.world.art?.[`portrait-${game.deck[0].character}`]
+      : undefined,
+  };
 }

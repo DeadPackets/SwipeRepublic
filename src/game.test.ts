@@ -3,7 +3,6 @@ import {
   freshGame,
   play,
   succeed,
-  retire,
   nextDraft,
   type World,
   type Card,
@@ -31,10 +30,6 @@ const world: World = {
     appearance: "human" as const,
     portrait: i,
   })),
-  ambitions: [
-    { name: "Independence", description: "Build autonomy" },
-    { name: "Safety", description: "Protect people" },
-  ],
 };
 const card: Card = {
   id: "one",
@@ -46,7 +41,6 @@ const card: Card = {
     {
       label: "Repair",
       consequence: "Crews begin work.",
-      advances: true,
       legacy: "Public pumps",
       promise: {
         title: "Pay the crews",
@@ -55,19 +49,16 @@ const card: Card = {
         resolve: {
           label: "Pay",
           consequence: "The debt is settled.",
-          advances: true,
         },
         abandon: {
           label: "Refuse",
           consequence: "The crews walk.",
-          advances: false,
         },
       },
     },
     {
       label: "Refuse",
       consequence: "Pumps fail.",
-      advances: false,
       legacy: null,
       promise: null,
     },
@@ -87,7 +78,6 @@ function fixture() {
 test("a choice changes support once, records history, and carries a promise into a callback", () => {
   const result = play(fixture(), "one", 0);
   expect(result.reign.support).toEqual([44, 50, 62, 56]);
-  expect(result.reign.progress).toBe(1);
   expect(result.history[0]?.action).toBe("Repair");
   expect(result.legacies).toContain("Public pumps");
   expect(() => play(result, "one", 0)).toThrow();
@@ -109,27 +99,27 @@ test("simultaneous collapse is terminal and succession preserves the world witho
   const result = play(g, "one", 0);
   expect(result.reign.ended?.kind).toBe("fall");
   expect(result.reign.ended?.reason).toContain("Faction 2");
-  const next = succeed(result, 1, 1);
+  const next = succeed(result, 1);
   expect(next.reign.number).toBe(2);
   expect(next.reign.support.every((n) => n >= 35)).toBe(true);
   expect(next.legacies).toContain("Public pumps");
   expect(next.commitments).toHaveLength(1);
-  expect(next.reign.progress).toBe(0);
 });
-test("retirement requires an earned ambition and a full mandate; term limit is enforced", () => {
+test("survival continues beyond 36 decisions and five reigns", () => {
   const g = fixture();
-  expect(() => retire(g)).toThrow();
-  g.reign.turn = 24;
-  g.reign.progress = 6;
-  expect(retire(g).reign.ended?.kind).toBe("retired");
   g.reign.turn = 35;
-  expect(play(g, "one", 1).reign.ended?.kind).toBe("term");
+  expect(play(g, "one", 1).reign.ended).toBeNull();
+  g.reign.turn = 160;
+  expect(play(g, "one", 1).reign.ended).toBeNull();
+  g.reign.number = 5;
+  g.reign.support[0] = 1;
+  expect(succeed(play(g, "one", 0), 1).reign.number).toBe(6);
 });
 
-test("an inherited promise does not count toward a different ambition", () => {
+test("an inherited promise remains a real decision", () => {
   const g = fixture();
   g.reign.support[0] = 5;
-  const next = succeed(play(g, "one", 0), 1, 1);
+  const next = succeed(play(g, "one", 0), 1);
   next.totalTurns = 4;
   const callback = nextDraft(next)!;
   next.card = {
@@ -138,15 +128,27 @@ test("an inherited promise does not count toward a different ambition", () => {
     commitmentId: callback.commitmentId,
     reactions: card.reactions,
   };
-  expect(play(next, "inherited", 0).reign.progress).toBe(0);
+  expect(play(next, "inherited", 0).commitments).toHaveLength(0);
 });
 
-test("history records actual gains at support and ambition limits", () => {
+test("history records actual gains at support limits", () => {
   const g = fixture();
   g.reign.support = [3, 50, 98, 100];
-  g.reign.progress = 6;
   const result = play(g, "one", 0);
   expect(result.reign.support).toEqual([0, 50, 100, 100]);
   expect(result.history[0]?.deltas).toEqual([-3, 0, 2, 0]);
-  expect(result.history[0]?.advanced).toBe(false);
+});
+
+test("a prepared card is promoted atomically unless a promise is due", () => {
+  const g = fixture();
+  g.deck = [{ ...structuredClone(card), id: "next" }];
+  expect(play(g, "one", 1).card?.id).toBe("next");
+  const promised = play(g, "one", 0);
+  promised.card = { ...structuredClone(card), id: "due-turn" };
+  promised.deck = [{ ...structuredClone(card), id: "later" }];
+  promised.totalTurns = 3;
+  const due = play(promised, "due-turn", 1);
+  expect(due.card).toBeNull();
+  expect(nextDraft(due)?.commitmentId).toBe(promised.commitments[0]!.id);
+  expect(due.deck).toHaveLength(1);
 });

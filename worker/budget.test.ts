@@ -21,7 +21,6 @@ test("a cheap callback fits the remaining allowance and completion is charged on
     factions: [],
     resources: [],
     characters: [],
-    ambitions: [],
   };
   const game = freshGame("test", "Test society", world);
   game.phase = "playing";
@@ -33,17 +32,14 @@ test("a cheap callback fits the remaining allowance and completion is charged on
       detail: "The crews need wages.",
       character: 0,
       source: "Wages",
-      ambition: 0,
       after: 3,
       resolve: {
         label: "Pay",
         consequence: "The crews are paid.",
-        advances: true,
       },
       abandon: {
         label: "Refuse",
         consequence: "The crews strike.",
-        advances: false,
       },
     },
   ];
@@ -66,6 +62,7 @@ test("a cheap callback fits the remaining allowance and completion is charged on
       return ready;
     },
     storage: {
+      setAlarm: async () => {},
       get: async () => saved,
       put: async (_: string, value: unknown) => {
         if (failNextWrite) {
@@ -111,4 +108,218 @@ test("a cheap callback fits the remaining allowance and completion is charged on
     error: "Repeated delivery",
   });
   expect((saved as { spent: number }).spent).toBeCloseTo(0.194);
+});
+
+function harness(initial: unknown, bindings: Record<string, unknown> = {}) {
+  let saved = structuredClone(initial);
+  let ready: Promise<unknown> = Promise.resolve();
+  const alarms: number[] = [];
+  const ctx = {
+    blockConcurrencyWhile: (fn: () => Promise<unknown>) => (ready = fn()),
+    storage: {
+      get: async () => structuredClone(saved),
+      put: async (_: string, value: unknown) => {
+        saved = structuredClone(value);
+      },
+      setAlarm: async (time: number) => {
+        alarms.push(time);
+      },
+    },
+  } as unknown as DurableObjectState;
+  const society = new Society(ctx, {
+    GAME_AI_BUDGET: "0.20",
+    ...bindings,
+  } as ConstructorParameters<typeof Society>[1]);
+  return { society, ready, alarms, saved: () => saved as any };
+}
+const emptySave = {
+  id: "test",
+  owner: "owner",
+  prompt: "A new society",
+  game: null,
+  lease: null,
+  error: null,
+  requests: [],
+  spent: 0,
+  attempts: 0,
+};
+
+test("legacy unfinished saves acquire durable generation on retry", async () => {
+  const h = harness(emptySave);
+  await h.ready;
+  await h.society.initialize("owner", "test", "A new society", "visitor");
+  expect(await h.society.continueFoundation("owner")).toBe(true);
+  expect(h.society.view("owner").creation?.done).toBe(0);
+  expect(h.alarms.length).toBeGreaterThan(0);
+  await expect(
+    h.society.initialize("other", "test", "A new society", "visitor"),
+  ).rejects.toThrow("Society not found");
+});
+
+test("terminated paid calls keep their per-game reservation through a restart", async () => {
+  const h = harness({ ...emptySave, spent: 0.18 });
+  await h.ready;
+  const work = await h.society.acquire("owner", false);
+  await h.society.allocated("owner", work!.lease.token);
+  await h.society.allocated("owner", work!.lease.token);
+  expect(h.saved().spent).toBeCloseTo(0.195);
+  expect(h.saved().attempts).toBe(1);
+  const restarted = harness({
+    ...h.saved(),
+    lease: { ...h.saved().lease, until: 0 },
+  });
+  await restarted.ready;
+  await expect(restarted.society.acquire("owner", false)).rejects.toThrow(
+    "allowance",
+  );
+  await restarted.society.finish("owner", work!.lease.token, {
+    cost: 0.003,
+    error: "Recovered outcome",
+  });
+  expect(restarted.saved().spent).toBeCloseTo(0.183);
+  await restarted.society.finish("owner", work!.lease.token, { cost: 0.003 });
+  expect(restarted.saved().spent).toBeCloseTo(0.183);
+});
+
+test("partial art failures preserve finished images and retry only missing work", async () => {
+  const world: World = {
+    name: "Test reef",
+    era: "Ninth tide",
+    role: "Speaker",
+    summary: "Octopuses live beneath the sea.",
+    calendar: "Tide",
+    tone: "night",
+    factions: [],
+    resources: ["Air", "Copper", "Oil"],
+    characters: Array.from({ length: 6 }, () => ({
+      name: "Adviser",
+      role: "Diver",
+      faction: 0,
+      personality: "Direct",
+      appearance: "An octopus",
+    })),
+    artDirection: {
+      scene: "An underwater city",
+      palette: "Teal",
+      identity: "Octopus republic",
+    },
+    art: Object.fromEntries(
+      [
+        "background",
+        ...Array.from({ length: 6 }, (_, i) => `portrait-${i}`),
+        "resource-0",
+      ].map((slot) => [slot, `/api/art/test/${slot}`]),
+    ),
+  };
+  const game = freshGame("test", "Private prompt", world);
+  game.card = {
+    id: "card",
+    title: "Air",
+    body: "Repair the pump?",
+    character: 0,
+    kind: "ordinary",
+    options: [],
+    reactions: [],
+  };
+  const images = new Set<string>();
+  const published: unknown[] = [];
+  const settlements: number[] = [];
+  let calls = 0;
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () => {
+    calls++;
+    if (calls === 2) return new Response("unavailable", { status: 502 });
+    return Response.json({
+      data: [{ b64_json: "AQID", media_type: "image/webp" }],
+      usage: { cost: 0.01 },
+    });
+  }) as unknown as typeof fetch;
+  try {
+    const h = harness(
+      {
+        ...emptySave,
+        game,
+        foundation: {
+          templateId: "template",
+          visitor: "visitor",
+          complete: false,
+        },
+      },
+      {
+        ART: {
+          head: async (key: string) => (images.has(key) ? {} : null),
+          put: async (key: string) => {
+            images.add(key);
+          },
+        },
+        BUDGET: {
+          getByName: () => ({
+            reserve: async () => {},
+            settle: async (_: string, cost: number) => {
+              settlements.push(cost);
+            },
+          }),
+        },
+        CAMPAIGNS: {
+          prepare: () => ({ bind: (...args: unknown[]) => args }),
+          batch: async (items: unknown[]) => {
+            published.push(items);
+          },
+        },
+      },
+    );
+    await h.ready;
+    await h.society.alarm();
+    expect(Object.keys(h.saved().game.world.art)).toHaveLength(9);
+    expect(h.society.view("owner").error).toContain("artwork");
+    expect(published).toHaveLength(0);
+    expect(calls).toBe(2);
+    await h.society.continueFoundation("owner");
+    await h.society.alarm();
+    expect(calls).toBe(3);
+    expect(Object.keys(h.saved().game.world.art)).toHaveLength(10);
+    await h.society.alarm();
+    await h.society.alarm();
+    expect(published).toHaveLength(1);
+    expect(h.society.view("owner").creation).toBeNull();
+    expect(h.saved().foundation.complete).toBe(true);
+    expect(h.saved().spent).toBeCloseTo(settlements.reduce((a, b) => a + b, 0));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("cached starts have their own admission limit and do not relax paid world limits", async () => {
+  const { Budget } = await import("./index");
+  let ready: Promise<unknown> = Promise.resolve();
+  let ledger: unknown;
+  const ctx = {
+    blockConcurrencyWhile: (fn: () => Promise<unknown>) => (ready = fn()),
+    storage: {
+      get: async () => undefined,
+      put: async (_: string, value: unknown) => {
+        ledger = structuredClone(value);
+      },
+      getAlarm: async () => 1,
+      setAlarm: async () => {},
+    },
+  } as unknown as DurableObjectState;
+  const budget = new Budget(ctx, {
+    DAILY_AI_BUDGET: "1",
+  } as ConstructorParameters<typeof Budget>[1]);
+  await ready;
+  for (let i = 0; i < 4; i++) await budget.admitWorld("visitor", `new-${i}`);
+  await expect(budget.admitWorld("visitor", "new-4")).rejects.toThrow(
+    "new-society allowance",
+  );
+  for (let i = 0; i < 20; i++)
+    await budget.admitWorld("visitor", `reuse-${i}`, true);
+  await budget.admitWorld("visitor", "reuse-0", true);
+  await expect(budget.admitWorld("visitor", "reuse-20", true)).rejects.toThrow(
+    "saved-campaign allowance",
+  );
+  expect((ledger as { spent: number }).spent).toBe(0);
+  await expect(budget.admitWorld("visitor", "new-4")).rejects.toThrow(
+    "new-society allowance",
+  );
 });

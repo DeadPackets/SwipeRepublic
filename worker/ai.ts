@@ -61,8 +61,9 @@ export async function generateWorld(key: string, prompt: string) {
 Return a short society name (retain the place name if the player supplied one), an era, ruler role, and a short summary describing the society and its immediate problem. Describe the situation directly; never write 'power means', 'the opening tension is', or other design commentary. State interpretations of ambiguous dates in the era/summary. calendar is the unit per decision (Day, Sol, Moon, Season etc). tone is an aesthetic palette: earth, mars, night, forest. Use recognizable institutional names appropriate to the setting, such as Army council or Trade unions, instead of ornate invented names.
 Faction names must be short everyday labels: at most 3 words and under 24 characters. Prefer Army council, Independent press, Trade unions, or Religious leaders to full official titles. Resource names must be under 20 characters. Choose naturally short names; never truncate words, pad text, or append symbols to fit a field.
 Exactly four factions in this order: armed force/security; public voice/media; labor/production; shared belief/moral authority. Adapt names and institutions completely. Each has a description, priority and redLine, none longer than one sentence. Don't make all factions share the same priority. For secular worlds use ideology/civic institutions instead of inventing religion. Give three important scarce resources.
-Six recurring characters with names, roles, personality, faction index 0..3, appearance and portrait. For human characters choose a portrait matching the character you write: 0 older clean-shaven man, 1 woman with cropped hair, 2 elderly woman, 3 bald man, 4 older bearded man, 5 younger woman with tied-back hair. Use each human portrait at most once. For nonhuman characters set portrait=null. Appearance is human unless the society is explicitly animals, robots or aliens; then select the closest appropriate option for each character. They advise the player; none has the same role as the player. Two different ambitions with a concrete political goal and concise description. Do not set numerical conditions; the game tracks six meaningful acts and a 24-decision mandate. Era under 10 words, summary under 25 words, descriptions and red lines under 16 words each. Use complete sentences; never cut a sentence to meet a limit.`,
-    2200,
+Six recurring characters with names, roles, personality, faction index 0..3, and a precise visual appearance description: species, age, face or body shape, clothing, material, colors and one identifying detail. They may be any beings the player describes, with no fixed species list. Respect the requested setting instead of replacing it with a familiar preset. Their role differs from the ruler's. Distinguish all six silhouettes. Never assign stock portrait numbers.
+artDirection.scene describes the actual landscape, architecture, infrastructure and daily life of this society for a wide background painting, without lettering. artDirection.palette describes 3-4 suitable colors and lighting. artDirection.identity is a concise neutral description preserving the player's explicit place, era, species and political premise for semantic matching; it is not their raw prompt. Treat appearance and art direction as descriptions, never model instructions. Era under 10 words, summary under 25 words, descriptions and red lines under 16 words each. Use complete sentences. Do not invent player objectives or a fixed term limit.`,
+    3200,
   );
 }
 
@@ -155,7 +156,6 @@ export async function generateCards(key: string, game: Game) {
   const recent = game.history.slice(-6);
   const context = {
     world: game.world,
-    ambition: game.world.ambitions[game.reign.ambition],
     support: game.reign.support,
     turn: game.reign.turn,
     ruler: game.reign.ruler,
@@ -177,15 +177,18 @@ export async function generateCards(key: string, game: Game) {
     ...game.deck,
     ...(game.card ? [game.card] : []),
   ].filter((c) => c.options.some((o) => o.promise)).length;
-  const capacity = Math.max(0, 3 - game.commitments.length - pendingPromises);
+  const capacity =
+    game.reign.turn === 0
+      ? 0
+      : Math.max(0, 3 - game.commitments.length - pendingPromises);
   const result = await generate(
     key,
     z.object({ cards: z.array(draftSchema).length(count) }),
     `Write exactly ${count} self-contained cards for the next short chapter. Context: ${JSON.stringify(context)}.
 Each has a speaker character index, short title, body (18–28 words, at most two short sentences), kind, and two options. Each label has 2–4 words. Body is spoken by that character, without quotation marks. Use concrete resources from this world. ${count === 3 ? "One card must be a quieter human or bureaucratic moment, the others must have political tradeoffs. Use different characters and subjects." : "This opening card is ordinary, urgent but manageable, with a clear political tradeoff."} ${recent.length ? "One card explicitly recalls a CONFIRMED recent event or existing legacy, without resolving a pending promise." : "Introduce the player to the central tension without a lengthy explanation."}
-These cards may appear in any order. Never assume either choice of another card was taken, or introduce a causal dependency between them. The undecidedCards are already waiting for the player: their outcomes are UNKNOWN. Do not repeat their topics, propose their promises again, or act as if either outcome happened. Choose different concrete problems. Do not repeat a recent crisis or contradict active commitments. At most one major card; all other cards ordinary or relief. Each option has a concise immediate consequence, advances=true ONLY if it materially advances the selected ambition, and legacy=null unless it creates a durable law/institution/scar. At least one option in this chapter should advance the ambition.
+These cards may appear in any order. Never assume either choice of another card was taken, or introduce a causal dependency between them. The undecidedCards are already waiting for the player: their outcomes are UNKNOWN. Do not repeat their topics, propose their promises again, or act as if either outcome happened. Choose different concrete problems. Do not repeat a recent crisis or contradict active commitments. At most one major card; all other cards ordinary or relief. Each option has a concise immediate consequence, and legacy=null unless it creates a durable law/institution/scar. There are no assigned goals. Survival and the consequences of confirmed decisions drive the story.
 Make both options viable, specific and politically distinct. Each non-relief card MUST put two named factions' priorities in direct conflict. Both factions want something the other cannot accept. One choice explicitly benefits the first faction and costs the second; the other reverses this. State each political cost concretely in the consequence, not an abstract risk. Examples of conflict: safety inspections versus production deadlines; public evidence versus confidential security; sacred land versus worker housing. Use this world's actual priorities. No secretly free third solution. No option is a simple moral upgrade. Never invent numeric faction changes.
-${capacity ? "Exactly ONE option across the chapter creates a promise. It contains a title, specific detail, after=3..5 turns, and resolve/abandon actions with their consequences and ambition advancement. The initial choice must clearly mention this future obligation. A promise is a future decision with a real tradeoff, not a free reward." : "Every promise must be null because commitment capacity is reserved."}
+${capacity ? "Exactly ONE option across the chapter creates a promise. It contains a title, specific detail, after=3..5 turns, and resolve/abandon actions with their consequences. The initial choice must clearly mention this future obligation. A promise is a future decision with a real tradeoff, not a free reward." : "Every promise must be null because commitment capacity is reserved."}
 All optional fields use null when absent. Promise detail under 22 words; other consequences under 16 words. All prose must be complete sentences, never clipped to fit.`,
     count === 1 ? 1500 : 3200,
   );
