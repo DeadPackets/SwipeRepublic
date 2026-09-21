@@ -29,6 +29,7 @@ const world: World = {
     faction: i % 4,
     personality: "Direct",
     appearance: "human" as const,
+    portrait: i,
   })),
   ambitions: [
     { name: "Independence", description: "Build autonomy" },
@@ -138,4 +139,14 @@ test("an inherited promise does not count toward a different ambition", () => {
     reactions: card.reactions,
   };
   expect(play(next, "inherited", 0).reign.progress).toBe(0);
+});
+
+test("history records actual gains at support and ambition limits", () => {
+  const g = fixture();
+  g.reign.support = [3, 50, 98, 100];
+  g.reign.progress = 6;
+  const result = play(g, "one", 0);
+  expect(result.reign.support).toEqual([0, 50, 100, 100]);
+  expect(result.history[0]?.deltas).toEqual([-3, 0, 2, 0]);
+  expect(result.history[0]?.advanced).toBe(false);
 });

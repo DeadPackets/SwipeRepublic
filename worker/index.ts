@@ -40,6 +40,7 @@ type Save = {
   requests: string[];
   spent: number;
   attempts: number;
+  settled?: string[];
 };
 const uuid = z.string().uuid();
 const mutationSchema = z.object({
@@ -149,11 +150,15 @@ export class Society extends DurableObject<Bindings> {
     }
     if (g?.card && (!background || g.deck.length > 0)) return null;
     if (g && !g.card && background) return null;
-    if (s.spent + 0.015 > Number(this.env.GAME_AI_BUDGET) || s.attempts >= 100)
+    const due = g && !g.card ? nextDraft(g) : null;
+    const reserve = due?.commitmentId ? 0.002 : 0.015;
+    if (
+      s.spent + reserve > Number(this.env.GAME_AI_BUDGET) ||
+      s.attempts >= 100
+    )
       throw new Error(
         "This society has reached its AI allowance. Your chronicle is saved.",
       );
-    const due = g && !g.card ? nextDraft(g) : null;
     const lease: Lease = {
       token: crypto.randomUUID(),
       until: Date.now() + 60000,
@@ -181,6 +186,11 @@ export class Society extends DurableObject<Bindings> {
     payload: { world?: World; cards?: Card[]; cost: number; error?: string },
   ) {
     const s = this.own(owner);
+    if (s.settled?.includes(token)) {
+      await this.persist();
+      return;
+    }
+    s.settled = [...(s.settled ?? []), token].slice(-256);
     s.spent += payload.cost;
     if (s.lease?.token !== token) {
       await this.persist();
@@ -448,8 +458,14 @@ export default {
       if (!path[1]) return json({ error: "Not found" }, 404);
       const id = uuid.parse(path[1]);
       const stub = env.SOCIETIES.getByName(id);
-      if (request.method === "GET" && !path[2])
-        return json(await stub.view(session));
+      if (request.method === "GET" && !path[2]) {
+        const state = await stub.view(session);
+        if (state.game?.card && !state.busy)
+          ctx.waitUntil(
+            prepare(env, stub, session, visitor, true).catch(() => {}),
+          );
+        return json(state);
+      }
       if (request.method !== "POST" || !path[2])
         return json({ error: "Not found" }, 404);
       if (path[2] === "prepare") {

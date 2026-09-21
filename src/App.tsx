@@ -1,7 +1,14 @@
 import { useEffect, useRef, useState } from "react";
-import type { PublicGame, Side } from "./game";
-import { AMBITION_TARGET, MAX_TURNS, RETIRE_TURN } from "./game";
-import { Portrait } from "./Portrait";
+import type { Card, PublicGame, Side } from "./game";
+import { AMBITION_TARGET, MAX_TURNS, RETIRE_TURN } from "./rules";
+import { DecisionCard } from "./DecisionCard";
+import { AnimatedNumber } from "./AnimatedNumber";
+import {
+  readSocieties,
+  rememberSociety,
+  SOCIETY_PREFIX,
+  type SavedSociety,
+} from "./storage";
 
 type Envelope = {
   game: PublicGame | null;
@@ -9,9 +16,8 @@ type Envelope = {
   error?: string;
   id: string;
 };
-type Save = { id: string; prompt: string; name: string };
+type Save = SavedSociety;
 type Action = { path: string; body: Record<string, unknown> };
-const SAVE_KEY = "swipe-republic:societies";
 const ACTIVE_KEY = "swipe-republic:active";
 function read<T>(key: string, fallback: T): T {
   try {
@@ -96,8 +102,11 @@ function download(game: PublicGame) {
 }
 
 export default function App() {
-  const [saves, setSaves] = useState<Save[]>(() => read(SAVE_KEY, []));
-  const [id, setId] = useState<string | null>(() => read(ACTIVE_KEY, null));
+  const [saves, setSaves] = useState<Save[]>(readSocieties);
+  const [id, setId] = useState<string | null>(() => {
+    const value = read<unknown>(ACTIVE_KEY, null);
+    return typeof value === "string" ? value : null;
+  });
   const active = useRef(id);
   const [game, setGame] = useState<PublicGame | null>(null);
   const [prompt, setPrompt] = useState("");
@@ -109,25 +118,51 @@ export default function App() {
   const [storageOK, setStorageOK] = useState(true);
   const [selected, setSelected] = useState<Side | null>(null);
   const [ambition, setAmbition] = useState<Side>(0);
-  const [coalition, setCoalition] = useState<Side>(0);
-  const [dialog, setDialog] = useState<"chronicle" | "world" | "help" | null>(
+  const [dialog, setDialog] = useState<
+    "menu" | "chronicle" | "world" | "help" | null
+  >(null);
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  const [factionDetail, setFactionDetail] = useState<number | null>(null);
+  const [departure, setDeparture] = useState<{ card: Card; side: Side } | null>(
     null,
   );
-  const dialogRef = useRef<HTMLDialogElement>(null);
-  const pointer = useRef<{ x: number; y: number; id: number } | null>(null);
-  const [drag, setDrag] = useState(0);
+  const departureTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [dialogClosing, setDialogClosing] = useState(false);
+  const dialogTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const gameRef = useRef(game);
   gameRef.current = game;
 
   function remember(save: Save) {
-    setSaves((previous) => {
-      const next = [save, ...previous.filter((s) => s.id !== save.id)].slice(
-        0,
-        30,
+    const saved = rememberSociety(save);
+    setStorageOK(saved);
+    setSaves((previous) => [
+      save,
+      ...(saved ? readSocieties() : previous).filter(
+        (item) => item.id !== save.id,
+      ),
+    ]);
+  }
+  useEffect(() => {
+    const update = (event: StorageEvent) => {
+      if (
+        event.key === null ||
+        event.key.startsWith(SOCIETY_PREFIX) ||
+        event.key === "swipe-republic:societies"
+      )
+        setSaves(readSocieties());
+    };
+    window.addEventListener("storage", update);
+    return () => window.removeEventListener("storage", update);
+  }, []);
+  async function ensureSession() {
+    if (navigator.locks)
+      await navigator.locks.request("swipe-republic:guest-session", () =>
+        api("/api/health"),
       );
-      setStorageOK(write(SAVE_KEY, next));
-      return next;
-    });
+    else
+      throw new Error(
+        "This browser cannot save a guest session safely. Open the game in a current browser over HTTPS.",
+      );
   }
   function switchId(next: string | null) {
     active.current = next;
@@ -136,6 +171,14 @@ export default function App() {
   }
   function accept(data: Envelope, expected: string) {
     if (active.current !== expected) return;
+    const current = gameRef.current;
+    if (
+      current?.id === expected &&
+      data.game &&
+      data.game.version < current.version
+    )
+      return;
+    gameRef.current = data.game;
     setGame(data.game);
     setBusy(data.busy);
     setError(
@@ -169,6 +212,9 @@ export default function App() {
   useEffect(() => {
     if (active.current) void resume(active.current);
   }, []);
+  useEffect(() => {
+    window.scrollTo({ top: 0, behavior: "instant" });
+  }, [id, game?.phase, game?.reign.number, Boolean(game?.reign.ended)]);
 
   async function create() {
     const setting = prompt.trim();
@@ -185,7 +231,7 @@ export default function App() {
     setBusy(false);
     lock.current = true;
     try {
-      await api("/api/health");
+      await ensureSession();
       accept(await api("/api/games", { id: target, prompt: setting }), target);
     } catch (cause) {
       if (active.current === target) setError((cause as Error).message);
@@ -211,7 +257,6 @@ export default function App() {
     setWorking(true);
     setError("");
     setSelected(null);
-    setDrag(0);
     try {
       const data = await api(action.path, action.body);
       write(`swipe-republic:action:${target}`, null);
@@ -248,7 +293,7 @@ export default function App() {
         write(`swipe-republic:action:${target}`, null);
       }
       if (!data.busy && !data.game && save) {
-        await api("/api/health");
+        await ensureSession();
         data = await api("/api/games", { id: target, prompt: save.prompt });
       }
       if (
@@ -321,9 +366,27 @@ export default function App() {
   }, [game, busy, working, error]);
 
   function choose(side: Side) {
-    if (game?.card && !working)
-      void mutate("choose", { cardId: game.card.id, side });
+    if (!game?.card || working || lock.current || departure) return;
+    setDeparture({ card: game.card, side });
+    departureTimer.current = setTimeout(() => setDeparture(null), 240);
+    void mutate("choose", { cardId: game.card.id, side });
   }
+  function closeDialog() {
+    setDialogClosing(true);
+    if (dialogTimer.current) clearTimeout(dialogTimer.current);
+    dialogTimer.current = setTimeout(() => {
+      dialogRef.current?.close();
+      setDialog(null);
+      setDialogClosing(false);
+    }, 140);
+  }
+  useEffect(
+    () => () => {
+      if (departureTimer.current) clearTimeout(departureTimer.current);
+      if (dialogTimer.current) clearTimeout(dialogTimer.current);
+    },
+    [],
+  );
   useEffect(() => {
     const listener = (event: KeyboardEvent) => {
       if (
@@ -365,20 +428,22 @@ export default function App() {
     setError("");
     setSelected(null);
     setDialog(null);
+    setDeparture(null);
   };
-  const last = game?.history.at(-1);
+  const latest = game?.history.at(-1);
+  const last = latest?.reign === game?.reign.number ? latest : undefined;
   const currentAmbition = game?.world.ambitions[game.reign.ambition];
-  const card = game?.card;
+  const card = departure?.card ?? game?.card;
   const character = game && card ? game.world.characters[card.character] : null;
   const reactions = card && selected !== null ? card.reactions[selected] : null;
   const doomed = reactions?.some(
     (r, i) => r.delta < 0 && game!.reign.support[i] + r.delta <= 0,
   );
   const loading = working || busy;
-
+  const pressure = game ? Math.min(...game.reign.support) : 50;
   const ambitions = game && (
     <fieldset className="ambition-options">
-      <legend>What will you be remembered for?</legend>
+      <legend>Choose your aim</legend>
       {game.world.ambitions.map((a, i) => (
         <label key={a.name}>
           <input
@@ -389,7 +454,7 @@ export default function App() {
           />
           <span>
             <strong>{a.name}</strong>
-            <span>{a.description}</span>
+            {ambition === i && <span>{a.description}</span>}
           </span>
         </label>
       ))}
@@ -400,22 +465,31 @@ export default function App() {
       {game.commitments.length ? (
         game.commitments.map((p) => (
           <p key={p.id}>
+            <strong>{p.title}</strong>
             <span>
               {p.due <= game.totalTurns
                 ? "Due now"
-                : `In ${p.due - game.totalTurns} decisions`}
+                : `In ${p.due - game.totalTurns} ${p.due - game.totalTurns === 1 ? "decision" : "decisions"}`}
             </span>
-            {p.title}
           </p>
         ))
       ) : (
-        <p className="quiet">No outstanding promises.</p>
+        <p className="quiet">No promises outstanding.</p>
       )}
     </div>
   );
+  function showWorld(index: number | null = null) {
+    setFactionDetail(index);
+    setDialog("world");
+  }
 
   return (
-    <div className="app">
+    <div
+      className="app"
+      data-tone={game?.world.tone ?? "earth"}
+      data-pressure={pressure <= 20 ? "critical" : "steady"}
+      data-ended={game?.reign.ended?.kind}
+    >
       <header className="masthead">
         <button
           className="wordmark"
@@ -423,29 +497,21 @@ export default function App() {
           disabled={working}
           aria-label="Swipe Republic, saved societies"
         >
-          Swipe Republic<span aria-hidden="true">✳</span>
+          Swipe Republic
         </button>
-        <nav aria-label="Game navigation">
-          {game && (
-            <>
-              <button onClick={() => setDialog("world")}>Your society</button>
-              <button onClick={() => setDialog("chronicle")}>Chronicle</button>
-            </>
-          )}
-          <button onClick={() => setDialog("help")} aria-label="How to play">
-            ?
-          </button>
-        </nav>
+        <button className="menu-button" onClick={() => setDialog("menu")}>
+          Menu
+        </button>
       </header>
       {error && (
         <div className="error" role="alert">
           <p>{error}</p>
           <div>
             <button onClick={() => void retry()} disabled={working}>
-              Retry safely
+              Try again
             </button>
             <button className="text-button" onClick={newSociety}>
-              Saved societies
+              Saved games
             </button>
           </div>
         </div>
@@ -453,56 +519,36 @@ export default function App() {
 
       {!id && (
         <main className="welcome">
-          <div className="welcome-mark" aria-hidden="true">
-            <div>R</div>
-          </div>
-          <h1>
-            What kind of world
-            <br />
-            would you rule?
-          </h1>
-          <p className="welcome-intro">
-            Keep four factions on your side. Your successor will inherit the
-            choices you make.
-          </p>
+          <h1>Where will you rule?</h1>
           <form
             onSubmit={(event) => {
               event.preventDefault();
               void create();
             }}
           >
-            <label htmlFor="setting">Where will your story begin?</label>
+            <label htmlFor="setting">Describe your world</label>
             <textarea
               id="setting"
               value={prompt}
-              onChange={(e) => setPrompt(e.target.value)}
+              onChange={(event) => setPrompt(event.target.value)}
               minLength={5}
               maxLength={400}
-              placeholder="A city on Mars, one year after independence…"
+              placeholder="Egypt, 2011. Or a colony on Mars…"
               rows={3}
               required
             />
-            <div className="setting-meta">
-              <span>Any place. Any era. Entirely yours.</span>
-              <span>{prompt.length}/400</span>
-            </div>
             <div className="examples">
               {[
                 "Arab Spring, 2011 Egypt",
                 "Future 1 AE Mars colony",
                 "A forest republic ruled by animals",
-              ].map((example) => (
+              ].map((example, i) => (
                 <button
                   type="button"
                   key={example}
                   onClick={() => setPrompt(example)}
                 >
-                  {example.startsWith("Arab")
-                    ? "2011 Egypt"
-                    : example.startsWith("Future")
-                      ? "Mars colony"
-                      : "Forest republic"}{" "}
-                  <span aria-hidden="true">↗</span>
+                  {["Egypt", "Mars", "Animal kingdom"][i]}
                 </button>
               ))}
             </div>
@@ -510,27 +556,22 @@ export default function App() {
               className="primary begin"
               disabled={prompt.trim().length < 5}
             >
-              Found a republic <span aria-hidden="true">→</span>
+              Begin
             </button>
           </form>
           {saves.length > 0 && (
-            <section className="saves">
-              <h2>Your societies</h2>
+            <details className="saves">
+              <summary>Saved games ({saves.length})</summary>
               {saves.map((save) => (
                 <button key={save.id} onClick={() => void resume(save.id)}>
-                  <span>
-                    {save.name}
-                    <small>{save.prompt}</small>
-                  </span>
-                  <span aria-hidden="true">↗</span>
+                  {save.name}
+                  <span aria-hidden="true">→</span>
                 </button>
               ))}
-            </section>
+            </details>
           )}
           <p className="footnote">
-            A game of fictional dilemmas, inspired by the world you describe.
-            <br />
-            Your societies are saved in this browser. No account needed.
+            A fictional history shaped by your choices.
           </p>
         </main>
       )}
@@ -543,17 +584,12 @@ export default function App() {
           >
             R
           </div>
-          <h1>
-            {loading ? "Preparing your society." : "Your society is saved."}
-          </h1>
+          <h1>{loading ? "Opening your world…" : "Your game is saved."}</h1>
           <p>
             {loading
-              ? "Creating the factions, people, and problems you will govern."
-              : "Retry to return to your saved society."}
+              ? "This can take up to a minute."
+              : "Try again to continue."}
           </p>
-          {loading && (
-            <p className="quiet">The first world can take up to a minute.</p>
-          )}
         </main>
       )}
 
@@ -561,235 +597,111 @@ export default function App() {
         <main className="introduction">
           <p className="setting-line">{game.world.era}</p>
           <h1>{game.world.name}</h1>
-          <p className="world-summary">{game.world.summary}</p>
-          <p className="role-line">
-            You are {game.world.role}. Four powers will decide how long you
-            remain.
-          </p>
-          <div className="faction-intro">
-            {game.world.factions.map((f, i) => (
-              <div key={f.name}>
-                <Icon index={i} />
-                <h2>{f.name}</h2>
-                <p>{f.description}</p>
-              </div>
-            ))}
-          </div>
-          <p className="resource-line">
-            At stake: {game.world.resources.join(" · ")}
-          </p>
+          <p className="role-line">You are {game.world.role}.</p>
           {ambitions}
           <button
             className="primary begin"
             disabled={working}
             onClick={() => void mutate("start", { ambition })}
           >
-            {working ? "Taking office…" : "Take office"}{" "}
-            <span aria-hidden="true">→</span>
+            {working ? "Taking office…" : "Take office"}
           </button>
-          <p className="footnote">
-            Keep every faction above zero. A reign lasts up to {MAX_TURNS}{" "}
-            decisions.
-            <br />
-            Six acts toward your ambition can earn a peaceful departure.
-          </p>
+          <button className="text-button" onClick={() => showWorld()}>
+            Meet your society
+          </button>
         </main>
       )}
 
       {game?.phase === "playing" && !game.reign.ended && (
         <main className="game-layout">
-          <aside className="history-aside">
-            <h2>Recent decisions</h2>
-            {game.history.length ? (
-              game.history.slice(-3).map((e) => (
-                <p key={e.turn}>
-                  <span>
-                    {game.world.calendar} {e.turn}
-                  </span>
-                  {e.consequence}
-                </p>
-              ))
-            ) : (
-              <p>Your decisions will appear here.</p>
-            )}
-            <button
-              className="text-button"
-              onClick={() => setDialog("chronicle")}
-            >
-              Read the chronicle →
-            </button>
-          </aside>
           <section className="play-column" aria-label="Current decision">
             <p className="reign-line">
               {game.world.name}
               <span>
-                Reign {game.reign.number} · Decision {game.reign.turn + 1} /{" "}
-                {MAX_TURNS}
+                {game.world.calendar} {game.reign.turn + 1} · Reign{" "}
+                {game.reign.number}
               </span>
             </p>
             <div className="factions" aria-label="Faction support">
               {game.world.factions.map((f, i) => {
                 const reaction = reactions?.[i];
                 const value = game.reign.support[i];
+                const delta = last?.deltas[i] ?? 0;
                 return (
                   <button
                     key={f.name}
                     className={`faction ${value <= 20 ? "low" : ""}`}
-                    onClick={() => setDialog("world")}
+                    onClick={() => showWorld(i)}
+                    title={`${f.name}: ${value}/100`}
                     aria-label={`${f.name}: ${value} support${reaction ? `, ${reaction.uncertain ? "uncertain " : ""}${reaction.delta > 0 ? "increase" : reaction.delta < 0 ? "decrease" : "unchanged"}` : ""}`}
                   >
                     <Icon index={i} />
-                    <span className="faction-name">{f.name}</span>
                     <span className="support-number">
-                      {value}
-                      <span
-                        className={`reaction ${reaction && reaction.delta < 0 ? "negative" : ""}`}
-                      >
-                        {reaction
-                          ? `${reaction.delta > 0 ? (reaction.delta >= 10 ? "↑↑" : "↑") : reaction.delta < 0 ? (reaction.delta <= -10 ? "↓↓" : "↓") : "—"}${reaction.uncertain ? "?" : ""}`
-                          : ""}
-                      </span>
+                      <AnimatedNumber value={value} />
+                      {reaction ? (
+                        <span
+                          className={`reaction ${reaction.delta < 0 ? "negative" : ""}`}
+                        >
+                          {reaction.delta > 0
+                            ? "↑"
+                            : reaction.delta < 0
+                              ? "↓"
+                              : "·"}
+                          {reaction.uncertain ? "?" : ""}
+                        </span>
+                      ) : (
+                        delta !== 0 && (
+                          <span
+                            key={last?.turn}
+                            className={`faction-change ${delta < 0 ? "negative" : ""}`}
+                            aria-hidden="true"
+                          >
+                            {delta > 0 ? "+" : ""}
+                            {delta}
+                          </span>
+                        )
+                      )}
                     </span>
                     <span className="meter">
-                      <i style={{ width: `${value}%` }} />
+                      <i style={{ transform: `scaleX(${value / 100})` }} />
                     </span>
                   </button>
                 );
               })}
             </div>
-            {last && (
-              <div className="last-outcome" aria-live="polite">
-                <p>{last.consequence}</p>
-                <div>
-                  {last.deltas.map((delta, i) => (
-                    <span key={i} title={game.world.factions[i].name}>
-                      <Icon index={i} />
-                      {delta > 0 ? "+" : ""}
-                      {delta}
-                    </span>
-                  ))}
-                  {last.advanced && (
-                    <span className="advanced">Ambition +1</span>
-                  )}
-                </div>
-              </div>
-            )}
+            <div className="sr-only" role="status">
+              {last
+                ? `${last.consequence} ${game.world.factions.map((f, i) => `${f.name}: ${game.reign.support[i]}`).join(". ")}`
+                : "Keep all four factions above zero."}
+            </div>
             {card ? (
               <>
-                <article
-                  className={`decision-card ${selected !== null ? "previewing" : ""} ${working ? "committing" : ""}`}
-                  style={{
-                    transform: drag
-                      ? `translateX(${drag}px) rotate(${drag / 25}deg)`
-                      : undefined,
-                  }}
-                  onPointerDown={(event) => {
-                    if (
-                      working ||
-                      (event.target as HTMLElement).closest("button")
-                    )
-                      return;
-                    pointer.current = {
-                      x: event.clientX,
-                      y: event.clientY,
-                      id: event.pointerId,
-                    };
-                    event.currentTarget.setPointerCapture(event.pointerId);
-                  }}
-                  onPointerMove={(event) => {
-                    const start = pointer.current;
-                    if (!start) return;
-                    const x = event.clientX - start.x;
-                    if (
-                      Math.abs(event.clientY - start.y) > Math.abs(x) &&
-                      Math.abs(x) < 20
-                    )
-                      return;
-                    setDrag(Math.max(-130, Math.min(130, x)));
-                    if (Math.abs(x) > 15) setSelected(x < 0 ? 0 : 1);
-                  }}
-                  onPointerUp={(event) => {
-                    const start = pointer.current;
-                    pointer.current = null;
-                    setDrag(0);
-                    if (
-                      start &&
-                      Math.abs(event.clientX - start.x) > 85 &&
-                      Math.abs(event.clientX - start.x) >
-                        Math.abs(event.clientY - start.y)
-                    )
-                      choose(event.clientX < start.x ? 0 : 1);
-                  }}
-                  onPointerCancel={() => {
-                    pointer.current = null;
-                    setDrag(0);
-                  }}
-                >
-                  <div className="portrait-wrap">
-                    <Portrait
-                      character={card.character}
-                      tone={game.world.tone}
-                      appearance={character?.appearance}
-                    />
-                    {card.commitmentId && (
-                      <span className="promise-stamp">A promise comes due</span>
-                    )}
-                  </div>
-                  <div className="card-body">
-                    <p className="speaker">
-                      {character?.name} · {character?.role}
-                    </p>
-                    <h1>{card.title}</h1>
-                    <p className="dilemma">{card.body}</p>
-                  </div>
-                  <div className="choices">
-                    {card.options.map((option, i) => (
-                      <button
-                        key={i}
-                        disabled={working}
-                        aria-pressed={selected === i}
-                        onClick={() => setSelected(i as Side)}
-                      >
-                        <span aria-hidden="true">{i === 0 ? "←" : "→"}</span>
-                        {option.label}
-                      </button>
-                    ))}
-                  </div>
-                </article>
-                <div className="decision-controls">
-                  {selected !== null ? (
-                    <>
-                      <p className={doomed ? "danger-warning" : ""}>
-                        {doomed
-                          ? "This choice may end your reign."
-                          : card.options[selected].advances
-                            ? "This choice advances your ambition."
-                            : "Check the faction reactions before you decide."}
-                      </p>
-                      <button
-                        className="primary confirm"
-                        disabled={working}
-                        onClick={() => choose(selected)}
-                      >
-                        {working
-                          ? "Recording your decision…"
-                          : `Choose: ${card.options[selected].label}`}
-                      </button>
-                      <button
-                        className="text-button cancel-choice"
-                        onClick={() => setSelected(null)}
-                        disabled={working}
-                      >
-                        Reconsider
-                      </button>
-                    </>
-                  ) : (
-                    <p className="swipe-help">
-                      Swipe to decide, or tap an option to consider it.
-                      <br />
-                      <span>← / → to preview · Enter to choose</span>
-                    </p>
-                  )}
+                <DecisionCard
+                  key={card.id}
+                  card={card}
+                  character={character!}
+                  tone={game.world.tone}
+                  selected={selected}
+                  working={working}
+                  leaving={departure?.side ?? null}
+                  onSelect={setSelected}
+                  onChoose={choose}
+                />
+                <div className="decision-hint" aria-live="polite">
+                  {doomed ? (
+                    <span className="danger-warning">
+                      This could end your reign.
+                    </span>
+                  ) : selected !== null ? (
+                    <span>
+                      {card.options[selected].advances &&
+                      game.reign.progress < AMBITION_TARGET
+                        ? "Helps your aim"
+                        : ""}
+                    </span>
+                  ) : game.reign.turn === 0 ? (
+                    <span>Swipe or choose. Keep every faction above zero.</span>
+                  ) : null}
                 </div>
               </>
             ) : (
@@ -800,285 +712,222 @@ export default function App() {
                 >
                   R
                 </div>
-                <h1>
-                  {error
-                    ? "Your decision is saved."
-                    : "Preparing the next card."}
-                </h1>
                 <p>
                   {error
-                    ? "Your decision has been saved. Retry above to continue."
-                    : "This usually takes a few seconds."}
+                    ? "Your choice is saved."
+                    : "The next visitor is on their way…"}
                 </p>
               </div>
             )}
-            <div className="mobile-promises">{commitments}</div>
-            <p className="save-state">
-              {storageOK
-                ? "Saved automatically in this browser"
-                : "Browser storage is unavailable. Keep this page open."}
-            </p>
-          </section>
-          <aside className="future-aside">
-            <h2>Promises</h2>
-            {commitments}
-            <div className="ambition-status">
-              <h2>{currentAmbition?.name}</h2>
-              <p>{currentAmbition?.description}</p>
-              <progress
-                max={AMBITION_TARGET}
-                value={game.reign.progress}
-                aria-label="Ambition progress"
-              />
-              <span>
-                {game.reign.progress} / {AMBITION_TARGET} acts ·{" "}
-                {game.reign.turn} / {RETIRE_TURN} decisions to retire
-              </span>
-              {game.reign.progress >= AMBITION_TARGET &&
-                game.reign.turn >= RETIRE_TURN && (
-                  <button
-                    onClick={() => void mutate("retire")}
-                    disabled={working}
-                  >
-                    Hand over power →
-                  </button>
-                )}
-            </div>
-            {game.legacies.length > 0 && (
-              <div className="legacies">
-                <h2>What you inherited</h2>
-                {game.legacies.map((l) => (
-                  <p key={l}>{l}</p>
-                ))}
-              </div>
+            {!storageOK && (
+              <p className="storage-warning" role="status">
+                Saving is unavailable. Keep this tab open.
+              </p>
             )}
-          </aside>
-          <section className="mobile-ambition">
-            <span>
-              {currentAmbition?.name} · {game.reign.progress}/{AMBITION_TARGET}
-            </span>
             {game.reign.progress >= AMBITION_TARGET &&
-            game.reign.turn >= RETIRE_TURN ? (
-              <button disabled={working} onClick={() => void mutate("retire")}>
-                Hand over power →
-              </button>
-            ) : (
-              <span>Retirement after decision {RETIRE_TURN}</span>
-            )}
+              game.reign.turn >= RETIRE_TURN && (
+                <button
+                  className="retire-button"
+                  disabled={working}
+                  onClick={() => void mutate("retire")}
+                >
+                  Hand over power
+                </button>
+              )}
           </section>
         </main>
       )}
 
       {game?.reign.ended && (
-        <main className="ending">
+        <main
+          className={`ending ending-${game.reign.ended.kind}`}
+          key={`${game.id}-ending-${game.reign.number}`}
+        >
           <p className="setting-line">
-            {game.world.name} · Reign {game.reign.number}
+            Reign {game.reign.number} · {game.reign.turn} decisions
           </p>
-          <div className="ending-mark" aria-hidden="true">
-            {game.reign.ended.kind === "fall" ? "↓" : "✳"}
-          </div>
           <h1>{game.reign.ended.title}</h1>
-          <p className="world-summary">{game.reign.ended.reason}</p>
-          <div className="reign-record">
-            <span>
-              {game.reign.turn}
-              <small>decisions in power</small>
-            </span>
-            <span>
-              {game.reign.progress}/{AMBITION_TARGET}
-              <small>{game.reign.ended.ambition}</small>
-            </span>
-          </div>
-          <section className="causal-history">
-            <h2>The decisions that brought you here</h2>
-            {game.history
-              .filter((e) => e.reign === game.reign.number)
-              .slice(-3)
-              .map((e) => (
-                <p key={e.turn}>
-                  <strong>{e.action}</strong>
-                  <span>{e.consequence}</span>
-                </p>
-              ))}
-          </section>
-          <div className="ending-actions">
-            <button onClick={() => download(game)}>
-              Keep this chronicle ↓
-            </button>
-            <button
-              className="text-button"
-              onClick={() => setDialog("chronicle")}
-            >
-              Read the full history
-            </button>
-          </div>
+          <p className="ending-reason">{game.reign.ended.reason}</p>
           {game.reign.number < 5 ? (
             <section className="succession">
-              <h2>Choose your successor.</h2>
-              <p>
-                Your laws, debts, and unfinished promises remain. Who inherits
-                them?
-              </p>
-              <fieldset className="coalitions">
-                <legend>Choose the next coalition</legend>
-                {[0, 1].map((c) => (
-                  <label key={c}>
-                    <input
-                      type="radio"
-                      name="coalition"
-                      checked={coalition === c}
-                      onChange={() => setCoalition(c as Side)}
-                    />
-                    <span>
-                      <strong>
-                        The {game.world.factions[c === 0 ? 0 : 2].name}{" "}
-                        candidate
-                      </strong>
-                      <span>
-                        {[65, 40, 40, 55]
-                          .map(
-                            (_, i) =>
-                              `${game.world.factions[i].name} ${c === 0 ? [65, 40, 40, 55][i] : [40, 55, 65, 40][i]}`,
-                          )
-                          .join(" · ")}
-                      </span>
-                    </span>
-                  </label>
+              <h2>Who rules next?</h2>
+              <div className="successor-options">
+                {([0, 1] as const).map((c) => (
+                  <button
+                    key={c}
+                    disabled={working}
+                    onClick={() =>
+                      void mutate("succeed", { coalition: c, ambition })
+                    }
+                  >
+                    <Icon index={c === 0 ? 0 : 2} />
+                    <span>{game.world.factions[c === 0 ? 0 : 2].name}</span>
+                    <span aria-hidden="true">→</span>
+                  </button>
                 ))}
-              </fieldset>
-              {ambitions}
-              <button
-                className="primary begin"
-                disabled={working}
-                onClick={() => void mutate("succeed", { coalition, ambition })}
-              >
-                {working ? "Passing the mandate…" : "Begin the next reign"}{" "}
-                <span aria-hidden="true">→</span>
-              </button>
+              </div>
+              <details className="next-ambition">
+                <summary>Change your aim</summary>
+                {ambitions}
+              </details>
             </section>
           ) : (
-            <section className="succession">
-              <h2>Your fifth reign is complete.</h2>
-              <p>You can keep the chronicle or start another society.</p>
-              <button className="primary begin" onClick={newSociety}>
-                Imagine another republic →
-              </button>
-            </section>
+            <button className="primary begin" onClick={newSociety}>
+              Start another society
+            </button>
           )}
+          <button
+            className="text-button"
+            onClick={() => setDialog("chronicle")}
+          >
+            Read the chronicle
+          </button>
         </main>
       )}
 
       {dialog && (
         <dialog
           ref={dialogRef}
-          onCancel={() => setDialog(null)}
+          className={dialogClosing ? "dialog-closing" : ""}
+          onCancel={(event) => {
+            event.preventDefault();
+            closeDialog();
+          }}
           onClick={(event) => {
-            if (event.target === event.currentTarget) setDialog(null);
+            if (event.target === event.currentTarget) closeDialog();
           }}
           aria-labelledby="dialog-title"
         >
           <div className="dialog-header">
             <h2 id="dialog-title">
-              {dialog === "chronicle"
-                ? "The chronicle"
-                : dialog === "world"
-                  ? game?.world.name
-                  : "How to play"}
+              {dialog === "menu"
+                ? "Your game"
+                : dialog === "chronicle"
+                  ? "Chronicle"
+                  : dialog === "world"
+                    ? game?.world.name
+                    : "How to play"}
             </h2>
             <button
               className="close-dialog"
-              aria-label="Close dialog"
-              onClick={() => setDialog(null)}
+              aria-label="Close menu"
+              onClick={closeDialog}
             >
               ×
             </button>
           </div>
           <div className="dialog-body">
+            {dialog !== "menu" && (
+              <button
+                className="text-button menu-back"
+                onClick={() => setDialog("menu")}
+              >
+                ← Menu
+              </button>
+            )}
+            {dialog === "menu" && (
+              <nav className="game-menu" aria-label="Game menu">
+                {game && (
+                  <>
+                    <button onClick={() => showWorld()}>
+                      Your society<span>→</span>
+                    </button>
+                    <button onClick={() => setDialog("chronicle")}>
+                      Chronicle<span>→</span>
+                    </button>
+                  </>
+                )}
+                <button onClick={() => setDialog("help")}>
+                  How to play<span>→</span>
+                </button>
+                <button disabled={working} onClick={newSociety}>
+                  Saved games<span>→</span>
+                </button>
+              </nav>
+            )}
             {dialog === "help" && (
               <div className="help">
-                <p>
-                  Describe any society. You take office among four factions,
-                  each with its own values and red lines.
-                </p>
                 <ol>
+                  <li>Swipe left or right, or press a choice.</li>
                   <li>
-                    Swipe left or right to commit. Tap an option to preview,
-                    then confirm. On a keyboard, use ← or → to preview and Enter
-                    to choose.
+                    Keep all four factions above zero. Tap an icon to learn what
+                    it wants.
                   </li>
                   <li>
-                    Arrows show which factions gain or lose support. Double
-                    arrows mean a larger change. A question mark means the
-                    reaction is less certain.
-                  </li>
-                  <li>
-                    Keep every faction above zero. If one withdraws its support,
-                    your reign ends. High support is safe.
-                  </li>
-                  <li>
-                    Make six choices toward your ambition. After {RETIRE_TURN}{" "}
-                    decisions, you can hand over power. Every term ends after{" "}
-                    {MAX_TURNS} decisions.
-                  </li>
-                  <li>
-                    A successor inherits your laws and unfinished promises. Each
-                    society holds up to five reigns.
+                    Promises return later. Your successor inherits your laws and
+                    debts.
                   </li>
                 </ol>
-                <p>
-                  Your choices save automatically. Use the Chronicle to keep a
-                  text copy. These are fictional situations, not historical
-                  reconstructions.
+                <details>
+                  <summary>Keyboard and game rules</summary>
+                  <p>
+                    Use ← or → to preview, then Enter to choose. Tab and Enter
+                    also work.
+                  </p>
+                  <p>
+                    Make {AMBITION_TARGET} choices toward your aim and survive{" "}
+                    {RETIRE_TURN} decisions to retire. A term ends at{" "}
+                    {MAX_TURNS} decisions. Each society has five reigns.
+                  </p>
+                  <p>
+                    Arrows preview a change. A question mark means the judgment
+                    is uncertain. Major crises have larger effects.
+                  </p>
+                </details>
+                <p className="quiet">
+                  Choices save automatically in this browser.
                 </p>
               </div>
             )}
             {dialog === "world" && game && (
               <>
-                <p className="setting-line">{game.world.era}</p>
                 <p>{game.world.summary}</p>
-                <p>Resources: {game.world.resources.join(", ")}</p>
                 <div className="world-factions">
                   {game.world.factions.map((f, i) => (
-                    <section key={f.name}>
-                      <h3>
+                    <details key={f.name} open={factionDetail === i}>
+                      <summary>
                         <Icon index={i} />
-                        {f.name} <span>{game.reign.support[i]}</span>
-                      </h3>
-                      <p>{f.description}</p>
-                      <dl>
-                        <dt>They want</dt>
-                        <dd>{f.priority}</dd>
-                        <dt>They will not accept</dt>
-                        <dd>{f.redLine}</dd>
-                      </dl>
-                    </section>
+                        {f.name}
+                        <span>{game.reign.support[i]}</span>
+                      </summary>
+                      <p>{f.priority}</p>
+                      <p className="quiet">Red line: {f.redLine}</p>
+                    </details>
                   ))}
                 </div>
-                <p className="quiet">Your original setting: {game.prompt}</p>
+                <details>
+                  <summary>
+                    Your aim · {game.reign.progress}/{AMBITION_TARGET}
+                  </summary>
+                  <h3>{currentAmbition?.name}</h3>
+                  <p>{currentAmbition?.description}</p>
+                  <p className="quiet">
+                    Retirement after {RETIRE_TURN} decisions.
+                  </p>
+                </details>
+                <details>
+                  <summary>Promises ({game.commitments.length})</summary>
+                  {commitments}
+                </details>
+                <details>
+                  <summary>Laws and resources</summary>
+                  {game.legacies.map((l) => (
+                    <p key={l}>{l}</p>
+                  ))}
+                  <p>{game.world.resources.join(" · ")}</p>
+                </details>
               </>
             )}
             {dialog === "chronicle" && game && (
               <>
-                <p>
-                  {game.world.name} · {game.totalTurns} decisions ·{" "}
-                  {game.endings.length} completed reigns
-                </p>
                 <button
                   onClick={() => download(game)}
                   disabled={!game.history.length}
                 >
-                  Download chronicle ↓
+                  Download chronicle
                 </button>
-                {game.legacies.length > 0 && (
-                  <section className="chronicle-legacies">
-                    <h3>What remains</h3>
-                    {game.legacies.map((l) => (
-                      <p key={l}>{l}</p>
-                    ))}
-                  </section>
-                )}
                 {game.history.length === 0 ? (
-                  <p>Your decisions will appear here.</p>
+                  <p className="quiet">Your decisions will appear here.</p>
                 ) : (
                   <ol className="chronicle-events">
                     {[...game.history].reverse().map((e) => (
@@ -1086,18 +935,8 @@ export default function App() {
                         <span className="quiet">
                           {game.world.calendar} {e.turn} · Reign {e.reign}
                         </span>
-                        <h3>{e.title}</h3>
-                        <p className="chronicle-action">{e.action}</p>
+                        <h3>{e.action}</h3>
                         <p>{e.consequence}</p>
-                        <p className="quiet">
-                          {game.world.factions
-                            .map(
-                              (f, i) =>
-                                `${f.name} ${e.deltas[i] > 0 ? "+" : ""}${e.deltas[i]}`,
-                            )
-                            .join(" · ")}
-                          {e.advanced ? " · Ambition +1" : ""}
-                        </p>
                       </li>
                     ))}
                   </ol>

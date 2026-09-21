@@ -1,4 +1,6 @@
 import { z } from "zod";
+import { MAX_TURNS, AMBITION_TARGET, RETIRE_TURN } from "./rules";
+export { MAX_TURNS, AMBITION_TARGET, RETIRE_TURN } from "./rules";
 
 const short = (max: number) => z.string().min(1).max(max);
 export const factionSchema = z.object({
@@ -23,6 +25,7 @@ export const worldSchema = z.object({
         role: short(50),
         faction: z.number().int().min(0).max(3),
         personality: short(120),
+        portrait: z.number().int().min(0).max(5).nullable(),
         appearance: z.enum([
           "human",
           "fox",
@@ -126,9 +129,6 @@ export type Game = {
 export type PublicGame = Omit<Game, "deck" | "cost" | "generations"> & {
   preparing: boolean;
 };
-export const MAX_TURNS = 36;
-export const AMBITION_TARGET = 6;
-export const RETIRE_TURN = 24;
 export function freshGame(id: string, prompt: string, world: World): Game {
   return {
     id,
@@ -213,8 +213,8 @@ export function play(game: Game, cardId: string, side: Side): Game {
     title: card.title,
     action: option.label,
     consequence: option.consequence,
-    deltas,
-    advanced: option.advances,
+    deltas: g.reign.support.map((value, i) => value - game.reign.support[i]!),
+    advanced: g.reign.progress > game.reign.progress,
   });
   g.history = g.history.slice(-180);
   g.card = null;
@@ -301,7 +301,7 @@ export function nextDraft(
       commitmentId: due.id,
       draft: {
         title: due.title,
-        body: `${due.detail} Your promise from “${due.source}” comes due today.`,
+        body: due.detail,
         character: due.character,
         kind: "major",
         options: [due.resolve, due.abandon].map((o) => ({
