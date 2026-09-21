@@ -14,7 +14,7 @@ Verified 21 September 2026. The final design follows the user's request for heav
 | Introduction / ending | More supporting text and action stages | Two aims with only the selected description; two direct successor choices |
 | Readability | Dense competing text | Single 420 px column, 23–25 px dialogue; 20–22 px for long stored cards |
 | Character art | Procedural SVG portraits | One bundled 196,884-byte WebP atlas with human, animal and speculative advisers |
-| Mood | Pale document styling | Dark olive, worn brass, severe portraits and restrained red |
+| Mood | Pale document styling and browser chrome | Dark olive, worn brass, severe portraits, restrained red, matching favicon and browser theme |
 | Motion | Limited feedback | Card arrival, direct drag, 240 ms departure, meter interpolation, brief numerical changes, dialog transitions |
 | Accessibility | Basic keyboard support | 44 px controls, accessible faction names/values, reaction symbols, modal focus restoration and reduced motion |
 | Client JavaScript | 101.83 KB gzip | 75.97 KB gzip; server validation schema removed from client dependency graph |
@@ -47,7 +47,7 @@ Use case: stylized-concept. Asset type: a production sprite atlas for a grim pol
 
 ## Release
 
-Worker version: `784ba658-e088-4356-9f9e-b06d5875a2a9`.
+Worker version: `d2424466-50a4-42a7-93a6-486b86446e5f`.
 
 - `https://swiperepublic.deadpackets.pw/api/health`: HTTPS success, status ok.
 - `https://swipe-republic.b00073615.workers.dev/api/health`: HTTPS success, status ok.
