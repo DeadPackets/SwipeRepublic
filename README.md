@@ -43,16 +43,14 @@ The opening card is generated before taking office and saved with the reusable t
 
 The initial three-card experiments cost $0.00183–$0.00191 per batch, including Jev, before the final prose prompt. They took about 12 seconds. These are measured samples, not a guarantee of latency or cost. Generation logs include model, elapsed time, and cost; game saves also accumulate costs. No player prompt or API key is deliberately logged.
 
-Default limits in `wrangler.jsonc`:
+There are no daily count limits on new societies or reused campaign starts.
+
+Remaining limits:
 
 | Limit | Default |
 |---|---:|
 | Global AI spend reservation per UTC day | $1.00 |
 | AI allowance per society | $0.20 |
-| World generation attempts per IP per UTC day | 4 |
-| New generated societies per UTC day | 100 globally, 4 per IP |
-| Reused campaign starts per UTC day | 200 globally, 20 per IP |
-| Paid preparations per IP per UTC day | 180 |
 | Paid preparations per society | 100 |
 | API requests per IP | 120 per minute |
 

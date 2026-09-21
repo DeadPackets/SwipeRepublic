@@ -55,8 +55,7 @@ type Save = {
   settled?: string[];
   reservations?: Record<string, number>;
   queued?: boolean;
-  visitor?: string;
-  foundation?: { templateId: string; visitor: string; complete: boolean };
+  foundation?: { templateId: string; complete: boolean };
 };
 const uuid = z.string().uuid();
 const mutationSchema = z.object({
@@ -91,7 +90,6 @@ export class Society extends DurableObject<Bindings> {
     owner: string,
     id: string,
     prompt: string,
-    visitor: string,
     template?: Template,
   ) {
     if (this.save) {
@@ -99,7 +97,6 @@ export class Society extends DurableObject<Bindings> {
       if (!existing.game && !existing.foundation) {
         existing.foundation = {
           templateId: crypto.randomUUID(),
-          visitor,
           complete: false,
         };
         existing.error = null;
@@ -122,7 +119,6 @@ export class Society extends DurableObject<Bindings> {
         ? {
             foundation: {
               templateId: crypto.randomUUID(),
-              visitor,
               complete: false,
             },
           }
@@ -316,7 +312,7 @@ export class Society extends DurableObject<Bindings> {
     }
     return true;
   }
-  async queuePreparation(owner: string, visitor: string) {
+  async queuePreparation(owner: string) {
     const s = this.own(owner);
     if (
       !s.game ||
@@ -326,7 +322,6 @@ export class Society extends DurableObject<Bindings> {
       return;
     if (s.game.card && s.game.deck.length >= 2) return;
     s.queued = true;
-    s.visitor = visitor;
     s.error = null;
     await this.persist();
     await this.ctx.storage.setAlarm(
@@ -343,9 +338,9 @@ export class Society extends DurableObject<Bindings> {
       return;
     }
     if (!s.foundation || s.foundation.complete) {
-      if (!s.queued || !s.visitor) return;
+      if (!s.queued) return;
       try {
-        await prepare(this.env, this, s.owner, s.visitor, !!s.game?.card);
+        await prepare(this.env, this, s.owner, !!s.game?.card);
       } catch (error) {
         s.error = /allowance/.test((error as Error).message)
           ? (error as Error).message
@@ -354,12 +349,12 @@ export class Society extends DurableObject<Bindings> {
       s.queued = false;
       await this.persist();
       if (!s.error && s.game && !s.game.card && !s.game.reign.ended)
-        await this.queuePreparation(s.owner, s.visitor);
+        await this.queuePreparation(s.owner);
       return;
     }
     try {
       if (!s.game) {
-        await prepare(this.env, this, s.owner, s.foundation.visitor);
+        await prepare(this.env, this, s.owner);
       } else {
         const missing = artTasks(s.game.world)
           .filter((task) => !s.game!.world.art?.[task.slot])
@@ -390,7 +385,7 @@ export class Society extends DurableObject<Bindings> {
           let cost = 0;
           const art: Record<string, string> = {};
           try {
-            await budget.reserve(s.foundation.visitor, token, false, reserved);
+            await budget.reserve(token, reserved);
             allocated = true;
             await this.allocated(s.owner, token);
             const outcomes = await Promise.allSettled(
@@ -434,7 +429,7 @@ export class Society extends DurableObject<Bindings> {
             if (allocated) await budget.settle(token, cost);
           }
         } else if (!s.game.card) {
-          await prepare(this.env, this, s.owner, s.foundation.visitor);
+          await prepare(this.env, this, s.owner);
         } else {
           await publishCampaign(
             this.env.CAMPAIGNS,
@@ -461,59 +456,23 @@ export class Society extends DurableObject<Bindings> {
 type Ledger = {
   spent: number;
   reservations: Record<string, number>;
-  visitors: Record<string, { calls: number; worlds: number }>;
-  creations?: Record<string, string>;
-  reuses?: Record<string, string>;
 };
 export class Budget extends DurableObject<Bindings> {
-  private ledger: Ledger = { spent: 0, reservations: {}, visitors: {} };
+  private ledger: Ledger = { spent: 0, reservations: {} };
   constructor(ctx: DurableObjectState, env: Bindings) {
     super(ctx, env);
     ctx.blockConcurrencyWhile(async () => {
       this.ledger = (await ctx.storage.get<Ledger>("ledger")) ?? this.ledger;
     });
   }
-  async admitWorld(visitor: string, id: string, reuse = false) {
-    const creations = reuse
-      ? (this.ledger.reuses ??= {})
-      : (this.ledger.creations ??= {});
-    if (creations[id]) return;
-    const visitors = Object.values(creations);
-    if (
-      visitors.length >= (reuse ? 200 : 100) ||
-      visitors.filter((v) => v === visitor).length >= (reuse ? 20 : 4)
-    )
-      throw new Error(
-        reuse
-          ? "Today’s saved-campaign allowance is used. Resume an existing reign or try again tomorrow."
-          : "Today’s new-society allowance is used. Existing societies remain available; try again tomorrow.",
-      );
-    creations[id] = visitor;
-    await this.ctx.storage.put("ledger", this.ledger);
-    if (!(await this.ctx.storage.getAlarm()))
-      await this.ctx.storage.setAlarm(Date.now() + 3 * 86400000);
-  }
-  async reserve(
-    visitor: string,
-    token: string,
-    world: boolean,
-    amount: number,
-  ) {
+  async reserve(token: string, amount: number) {
     const l = this.ledger;
     if (token in l.reservations) return;
-    const v = l.visitors[visitor] ?? { calls: 0, worlds: 0 };
-    if (v.calls >= 180 || (world && v.worlds >= 4))
-      throw new Error(
-        "Today’s creation allowance is used. Your existing societies are saved; try again tomorrow.",
-      );
     const reserved = Object.values(l.reservations).reduce((a, b) => a + b, 0);
     if (l.spent + reserved + amount > Number(this.env.DAILY_AI_BUDGET))
       throw new Error(
         "The republic is resting. Today’s AI allowance is used; your progress is saved for tomorrow.",
       );
-    v.calls++;
-    if (world) v.worlds++;
-    l.visitors[visitor] = v;
     l.reservations[token] = amount;
     await this.ctx.storage.put("ledger", l);
     if (!(await this.ctx.storage.getAlarm()))
@@ -534,7 +493,6 @@ async function prepare(
   env: Bindings,
   stub: Pick<Society, "acquire" | "allocated" | "finish">,
   owner: string,
-  visitor: string,
   background = false,
 ) {
   const work = await stub.acquire(owner, background);
@@ -544,12 +502,7 @@ async function prepare(
   let allocated = false;
   let cost = reserved;
   try {
-    await budget.reserve(
-      visitor,
-      work.lease.token,
-      work.lease.kind === "world",
-      reserved,
-    );
+    await budget.reserve(work.lease.token, reserved);
     allocated = true;
     if (!(await stub.allocated(owner, work.lease.token))) {
       cost = 0;
@@ -671,16 +624,6 @@ export default {
       const lookup =
         url.pathname === "/api/campaigns/match" && request.method === "POST";
       if (!path && !lookup) return json({ error: "Not found" }, 404);
-      const visitorBytes = await crypto.subtle.digest(
-        "SHA-256",
-        new TextEncoder().encode(
-          `${new Date().toISOString().slice(0, 10)}:${request.headers.get("CF-Connecting-IP") ?? "local"}`,
-        ),
-      );
-      const visitor = Array.from(new Uint8Array(visitorBytes))
-        .slice(0, 12)
-        .map((n) => n.toString(16).padStart(2, "0"))
-        .join("");
       let raw: unknown = {};
       if (request.method === "POST") {
         const reader = request.body?.getReader();
@@ -714,7 +657,7 @@ export default {
         let reserved = false;
         let cost = MATCH_RESERVATION;
         try {
-          await budget.reserve(visitor, token, false, MATCH_RESERVATION);
+          await budget.reserve(token, MATCH_RESERVATION);
           reserved = true;
           const result = await matchCampaigns(
             env.OPENROUTER_API_KEY,
@@ -749,15 +692,11 @@ export default {
             },
             404,
           );
-        await env.BUDGET.getByName(
-          new Date().toISOString().slice(0, 10),
-        ).admitWorld(visitor, body.id, !!template);
         const stub = env.SOCIETIES.getByName(body.id);
         await stub.initialize(
           session,
           body.id,
           body.prompt,
-          visitor,
           template ?? undefined,
         );
         await stub.continueFoundation(session);
@@ -769,7 +708,7 @@ export default {
       if (request.method === "GET" && !path[2]) {
         const state = await stub.view(session);
         if (state.game?.card && !state.busy && !state.creation)
-          await stub.queuePreparation(session, visitor);
+          await stub.queuePreparation(session);
         return json(await stub.view(session));
       }
       if (request.method !== "POST" || !path[2])
@@ -777,15 +716,15 @@ export default {
       if (path[2] === "prepare") {
         if (await stub.continueFoundation(session))
           return json(await stub.view(session));
-        await stub.queuePreparation(session, visitor);
+        await stub.queuePreparation(session);
         const state = await stub.view(session);
         if (state.game?.card && !state.busy && !state.creation)
-          await stub.queuePreparation(session, visitor);
+          await stub.queuePreparation(session);
         return json(await stub.view(session));
       }
       const state = await stub.mutate(session, path[2], raw);
       if (!state.game?.reign.ended && !state.busy)
-        await stub.queuePreparation(session, visitor);
+        await stub.queuePreparation(session);
       return json(await stub.view(session));
     } catch (error) {
       if (error instanceof z.ZodError || error instanceof SyntaxError)

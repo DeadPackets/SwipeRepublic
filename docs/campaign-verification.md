@@ -25,11 +25,11 @@ Production: https://swiperepublic.deadpackets.pw/
 - Live health returned version 2. Live reuse smoke passed in five seconds: ten persistent images, correct cache headers, owner-only saves, matching, independent initial state and idempotent decisions. The background response contained 616,292 bytes.
 - Existing live Mars save loaded with its legacy portrait fallback. Its recorded history and choices were not changed by the migration.
 
-## Live test boundary
+## Original release test boundary (superseded below)
 
-The production test IP had already used its four new-world admissions that UTC day. Fresh production generation was correctly refused. Full paid generation was verified in isolated local Cloudflare storage using the real Luna, Jev and Muse APIs. The already generated Copper Bells template and its ten images were then copied to production D1/R2; no private run, prompt or cookie was published. Live reuse and gameplay were verified against that template.
+The production test IP had already used its four new-world admissions that UTC day. Fresh production generation was refused by an unrequested application quota. Full paid generation was verified in isolated local Cloudflare storage using the real Luna, Jev and Muse APIs. The already generated Copper Bells template and its ten images were then copied to production D1/R2; no private run, prompt or cookie was published. Live reuse and gameplay were verified against that template.
 
-Cached starts now have a separate allowance of twenty per IP per day, with two hundred globally. Paid world admission remains four per IP; the $1/day and $0.20/game reservations are unchanged. A regression test verifies that cached admissions cannot relax the paid-world limit.
+That release gave cached starts a separate allowance of twenty per IP per day, with two hundred globally. Paid world admission remains four per IP; the $1/day and $0.20/game reservations are unchanged. A regression test verifies that cached admissions cannot relax the paid-world limit.
 
 The D1 bulk-import endpoint rejected the authenticated import. The same idempotent SQL succeeded through D1's query endpoint. All ten R2 uploads completed before the template was published.
 
@@ -63,3 +63,12 @@ Larger catalogs use bounded full-text retrieval plus recent entries before Jev s
 The gesture path coalesces position updates with animation frames and uses transforms and opacity. No frame-rate claim was made or measured. Generation timing varies with provider load.
 
 A final image-size probe requested `resolution: "512"`. Muse accepted it but still returned a 1600×1600 WebP (146,764 bytes). No claim of server-side resizing is made; production keeps the verified request format, immutable caching and selective portrait preloading.
+
+
+## Daily creation quotas removed — 2026-09-22
+
+The user rejected the unrequested daily creation quota. Removed all daily count-based admissions for new worlds, cached starts and paid preparations, including the duplicate four-world check. Removed the now-unused daily IP hash and visitor plumbing. Existing saved ledgers and games require no reset. The separate monetary reservations and short-term API rate limit remain.
+
+The regression test first failed against the old backend with the creation-allowance error. It now passes with a persisted ledger containing 100 new-world admissions, 200 cached admissions and a visitor at 180 calls/four worlds. Reservation and settlement idempotency still pass. Full validation: 15 tests, 69 assertions, TypeScript and production build passed.
+
+Deployed Worker version `5c3fea56-f4c8-4768-9715-13f13280099a`. Fresh production generation completed Observatory Republic with all ten images in 77 seconds. The same smoke run verified image persistence, private-save ownership, matching (97.11), independent campaign reuse and duplicate-decision handling.

@@ -147,12 +147,12 @@ const emptySave = {
 test("legacy unfinished saves acquire durable generation on retry", async () => {
   const h = harness(emptySave);
   await h.ready;
-  await h.society.initialize("owner", "test", "A new society", "visitor");
+  await h.society.initialize("owner", "test", "A new society");
   expect(await h.society.continueFoundation("owner")).toBe(true);
   expect(h.society.view("owner").creation?.done).toBe(0);
   expect(h.alarms.length).toBeGreaterThan(0);
   await expect(
-    h.society.initialize("other", "test", "A new society", "visitor"),
+    h.society.initialize("other", "test", "A new society"),
   ).rejects.toThrow("Society not found");
 });
 
@@ -289,15 +289,25 @@ test("partial art failures preserve finished images and retry only missing work"
   }
 });
 
-test("cached starts have their own admission limit and do not relax paid world limits", async () => {
+test("legacy daily creation counts do not block new generation", async () => {
   const { Budget } = await import("./index");
   let ready: Promise<unknown> = Promise.resolve();
-  let ledger: unknown;
+  let ledger = {
+    spent: 0.1,
+    reservations: {} as Record<string, number>,
+    visitors: { visitor: { calls: 180, worlds: 4 } },
+    creations: Object.fromEntries(
+      Array.from({ length: 100 }, (_, i) => [`new-${i}`, "visitor"]),
+    ),
+    reuses: Object.fromEntries(
+      Array.from({ length: 200 }, (_, i) => [`reuse-${i}`, "visitor"]),
+    ),
+  };
   const ctx = {
     blockConcurrencyWhile: (fn: () => Promise<unknown>) => (ready = fn()),
     storage: {
-      get: async () => undefined,
-      put: async (_: string, value: unknown) => {
+      get: async () => structuredClone(ledger),
+      put: async (_: string, value: typeof ledger) => {
         ledger = structuredClone(value);
       },
       getAlarm: async () => 1,
@@ -308,18 +318,15 @@ test("cached starts have their own admission limit and do not relax paid world l
     DAILY_AI_BUDGET: "1",
   } as ConstructorParameters<typeof Budget>[1]);
   await ready;
-  for (let i = 0; i < 4; i++) await budget.admitWorld("visitor", `new-${i}`);
-  await expect(budget.admitWorld("visitor", "new-4")).rejects.toThrow(
-    "new-society allowance",
-  );
-  for (let i = 0; i < 20; i++)
-    await budget.admitWorld("visitor", `reuse-${i}`, true);
-  await budget.admitWorld("visitor", "reuse-0", true);
-  await expect(budget.admitWorld("visitor", "reuse-20", true)).rejects.toThrow(
-    "saved-campaign allowance",
-  );
-  expect((ledger as { spent: number }).spent).toBe(0);
-  await expect(budget.admitWorld("visitor", "new-4")).rejects.toThrow(
-    "new-society allowance",
+  await budget.reserve("new-world", 0.015);
+  expect(ledger.reservations["new-world"]).toBe(0.015);
+  await budget.reserve("new-world", 0.015);
+  expect(Object.keys(ledger.reservations)).toHaveLength(1);
+  await budget.settle("new-world", 0.005);
+  await budget.settle("new-world", 0.005);
+  expect(ledger.spent).toBeCloseTo(0.105);
+  expect(ledger.reservations).toEqual({});
+  await expect(budget.reserve("over-budget", 1)).rejects.toThrow(
+    "AI allowance",
   );
 });
