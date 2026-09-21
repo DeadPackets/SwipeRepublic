@@ -1,0 +1,33 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "swipe-republic",
+  "main": "worker/index.ts",
+  "compatibility_date": "2026-09-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "routes": [
+    { "pattern": "swiperepublic.deadpackets.pw", "custom_domain": true },
+  ],
+  "assets": {
+    "directory": "./dist/client",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*"],
+  },
+  "durable_objects": {
+    "bindings": [
+      { "name": "SOCIETIES", "class_name": "Society" },
+      { "name": "BUDGET", "class_name": "Budget" },
+    ],
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Society", "Budget"] }],
+  "vars": { "DAILY_AI_BUDGET": "1.00", "GAME_AI_BUDGET": "0.20" },
+  "ratelimits": [
+    {
+      "name": "REQUEST_LIMIT",
+      "namespace_id": "52954",
+      "simple": { "limit": 120, "period": 60 },
+    },
+  ],
+  "limits": { "cpu_ms": 1000 },
+  "observability": { "enabled": true, "head_sampling_rate": 0.1 },
+}
