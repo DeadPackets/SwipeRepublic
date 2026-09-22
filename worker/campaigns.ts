@@ -1,7 +1,6 @@
 import { score, TypeSafeClient } from "@typesafe-ai/sdk";
 import { freshGame, type World, type Card } from "../src/game";
 
-export const CAMPAIGN_VERSION = 3;
 export const MATCH_RESERVATION = 0.005;
 export type CampaignCandidate = {
   id: string;
@@ -54,9 +53,8 @@ export async function candidates(
   const columns = "id, name, era, summary, identity";
   const recent = await db
     .prepare(
-      `SELECT ${columns} FROM campaigns WHERE version = ? ORDER BY created DESC LIMIT 65`,
+      `SELECT ${columns} FROM campaigns ORDER BY created DESC LIMIT 65`,
     )
-    .bind(CAMPAIGN_VERSION)
     .all<CampaignCandidate>();
   if (recent.results.length <= 64) return recent.results;
   const words = [
@@ -65,9 +63,9 @@ export async function candidates(
   if (!words.length) return recent.results.slice(0, 64);
   const found = await db
     .prepare(
-      `SELECT ${columns} FROM campaigns WHERE version = ? AND id IN (SELECT id FROM campaign_search WHERE campaign_search MATCH ? ORDER BY rank LIMIT 48)`,
+      `SELECT ${columns} FROM campaigns WHERE id IN (SELECT id FROM campaign_search WHERE campaign_search MATCH ? ORDER BY rank LIMIT 48)`,
     )
-    .bind(CAMPAIGN_VERSION, words.map((word) => `"${word}"`).join(" OR "))
+    .bind(words.map((word) => `"${word}"`).join(" OR "))
     .all<CampaignCandidate>();
   return [
     ...new Map(
@@ -130,8 +128,8 @@ export async function getCampaign(
   id: string,
 ): Promise<Template | null> {
   const row = await db
-    .prepare("SELECT world, cards FROM campaigns WHERE id = ? AND version = ?")
-    .bind(id, CAMPAIGN_VERSION)
+    .prepare("SELECT world, cards FROM campaigns WHERE id = ?")
+    .bind(id)
     .first<{ world: string; cards: string }>();
   return row
     ? { world: JSON.parse(row.world), cards: JSON.parse(row.cards) }
@@ -144,15 +142,14 @@ export async function publishCampaign(
   world: World,
   cards: Card[],
 ) {
-  const identity = world.artDirection!.identity;
+  const identity = world.artDirection.identity;
   await db.batch([
     db
       .prepare(
-        "INSERT OR IGNORE INTO campaigns (id, version, name, era, summary, identity, world, cards, created) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT OR IGNORE INTO campaigns (id, name, era, summary, identity, world, cards, created) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
       )
       .bind(
         id,
-        CAMPAIGN_VERSION,
         world.name,
         world.era,
         world.summary,

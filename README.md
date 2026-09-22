@@ -28,33 +28,33 @@ Type a setting. It can be a historical place, a future colony, or a society whos
 
 > A republic of clockwork bees inside an abandoned observatory, 800 years after humans vanished.
 
-The game builds a society around your description: four competing factions, 24 recurring characters, and something essential that's about to run out. Names, resource warnings, faction symbols and character silhouettes come from that world. The bees get bee problems.
+The game builds a society around your description: four competing factions, 24 recurring characters, and eight ways for those factions to end your reign. Names, deaths, faction symbols and character silhouettes come from that world. The bees get bee problems.
 
 Your introduction shows you the place and the people before you take office. Then the first visitor arrives with a request. There are two answers. Neither needs to be a good idea.
 
 ## How to play
 
-Read one short request, check who stands to gain, and choose a side. There's no fixed turn limit or checklist of aims; survival is the job. The AI spending allowance is separate: see [cost controls](#cost-controls).
+Read one short request, check who reacts, and choose a side. There's no fixed turn limit or checklist of aims; survival is the job, and your dynasty outlives you. The AI spending allowance is separate: see [cost controls](#cost-controls).
 
 | Control | What it does |
 |---|---|
 | Swipe the card | Drag left or right to answer. |
 | Click or tap a choice | Answer with the same full card swipe. |
 | Hold **←** or **→** | Commit after 700 ms. Release early to cancel. |
-| Hover or focus a choice | Preview faction reactions before deciding. |
+| Hover, focus or drag | See which factions react, and how strongly. Never which way. |
 
-Keep every faction above zero support and keep your essential reserve from running dry. A supply delivery can buy time. It can also put the person who controls the delivery in a very good bargaining position.
+Keep every faction between empty and full. A faction at 0 has abandoned you. A faction at 100 owns you, and that ends a ruler just as surely.
 
-Promises return after three to five decisions. Your laws and unfinished business shape later choices. If a faction withdraws its support or your reserves run out, the run ends permanently. You can also choose **Menu → Abandon run** to end it early. Your chronicle stays in Saved games.
+When you fall, a death card records how, and you pick which faction backs your successor. Promises, laws and grudges carry on. Every faction can end a ruler two ways; collect all eight. Only **Menu → Abandon dynasty** ends the game, and your chronicle stays in Saved games.
 
 <details>
 <summary>Before you blame the controls</summary>
 
 - A held arrow answers once. Release it before choosing again; Enter and Space don't submit a decision.
-- Four factions start at 50 support. Reaching zero ends the reign; reaching 100 is safe.
-- The reserve starts at six. Each decision consumes one unit, while the chosen action can maintain or replenish it. The cap is eight.
-- A question mark in a reaction preview means Jev's judgment is uncertain. That reaction has a smaller maximum effect.
-- Reduced motion is available in Menu and follows your system preference. Promises, world details and your chronicle also live in Menu.
+- Four factions start at 50 support. Reaching 0 or 100 ends the reign.
+- A small dot is a small reaction, a large dot a large one. A flickering dot means Jev's judgment is uncertain, and that reaction has a smaller maximum effect.
+- A successor's backer starts at 65, the rival candidate's faction at 40, the others at 50.
+- Reduced motion and sound are in Menu. Motion follows your system preference; sound is off by default. Promises, people and your chronicle also live in Menu.
 
 </details>
 
@@ -65,7 +65,7 @@ The models have separate jobs. The game code applies the results.
 | Model | Job | Integration |
 |---|---|---|
 | Luna · `~openai/gpt-luna-latest` | Writes the world, cast and dialogue; supplies faction symbols and silhouettes as vector path data. | AI SDK + OpenRouter provider |
-| Jev · `~typesafe/jev-latest` | Scores both choices against each faction's priorities, evaluates reserves, and checks similar societies. | TypeSafe SDK / System One through OpenRouter |
+| Jev · `~typesafe/jev-latest` | Scores both choices against each faction's priorities and checks similar societies. | TypeSafe SDK / System One through OpenRouter |
 | Muse · `meta/muse-image` | Paints one background for a new society. | OpenRouter Images API |
 
 Portraits and icons render locally as SVG. A new face doesn't need another image call. Faction colors help you recognize affiliations; they don't reveal hidden motives.
@@ -194,7 +194,7 @@ bun test src worker
 bun run build
 ```
 
-Tests cover held-key controls, reserve depletion, permanent endings, abandonment, promise callbacks, save isolation and generation budgets. The build also checks TypeScript.
+Tests cover held-key controls, deaths at both limits, succession, hidden previews, abandonment, promise callbacks, save isolation and generation budgets. The build also checks TypeScript.
 
 For a full campaign test with real model calls, pass your running server's URL:
 
@@ -207,7 +207,8 @@ This spends OpenRouter credit and creates test saves. It checks generation, artw
 | Start here | For |
 |---|---|
 | [src/game.ts](src/game.ts) | Game rules, state and schemas |
-| [src/DecisionCard.tsx](src/DecisionCard.tsx) | Card gestures and the shared swipe animation |
+| [src/play/DecisionCard.tsx](src/play/DecisionCard.tsx) | Card gestures, throw and deal animation |
+| [src/motion.ts](src/motion.ts) | Every motion constant |
 | [worker/ai.ts](worker/ai.ts) | Luna prompts and Jev scoring |
 | [worker/index.ts](worker/index.ts) | API, saves and generation jobs |
 | [DESIGN.md](DESIGN.md) | Visual direction and interaction choices |

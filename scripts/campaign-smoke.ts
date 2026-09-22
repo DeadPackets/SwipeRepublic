@@ -67,12 +67,12 @@ while (!state.value.game || state.value.creation) {
   assert.equal(state.status, 200, state.value.error);
 }
 const world = state.value.game as PublicGame;
-assert.equal(Object.keys(world.world.art ?? {}).length, 1);
+assert.ok(world.world.background);
 assert.ok(world.card);
 assert.equal(world.world.characters.length, 24);
-assert.ok(world.world.characters.every((c) => c.silhouette?.length));
-assert.ok(world.world.factions.every((f) => f.symbol?.length && f.label));
-const art = await fetch(`${base}${world.world.art!.background}`);
+assert.ok(world.world.characters.every((c) => c.silhouette.length));
+assert.ok(world.world.factions.every((f) => f.symbol.length && f.label && f.collapse.title && f.excess.title));
+const art = await fetch(`${base}${world.world.background}`);
 assert.equal(art.status, 200);
 assert.match(art.headers.get("content-type")!, /^image\/(webp|png|jpeg)$/);
 assert.match(art.headers.get("cache-control")!, /immutable/);
@@ -105,7 +105,7 @@ const reused = await request("/api/games", {
 });
 assert.equal(reused.status, 200, reused.value.error);
 assert.equal(reused.value.creation, null);
-assert.deepEqual(reused.value.game.world.art, world.world.art);
+assert.equal(reused.value.game.world.background, world.world.background);
 assert.deepEqual(reused.value.game.reign.support, [50, 50, 50, 50]);
 assert.equal(reused.value.game.totalTurns, 0);
 assert.equal(reused.value.game.history.length, 0);

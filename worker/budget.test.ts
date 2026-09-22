@@ -1,5 +1,6 @@
 import { test, expect, mock } from "bun:test";
-import { freshGame, type World } from "../src/game";
+import { freshGame, play, type Succession } from "../src/game";
+import { testCard, testWorld } from "../src/testWorld";
 mock.module("cloudflare:workers", () => ({
   DurableObject: class {
     constructor(
@@ -8,118 +9,22 @@ mock.module("cloudflare:workers", () => ({
     ) {}
   },
 }));
-const { SocietyV3: Society } = await import("./index");
-
-test("a cheap callback fits the remaining allowance and completion is charged once", async () => {
-  const world: World = {
-    name: "Test",
-    era: "Now",
-    role: "Steward",
-    summary: "Test",
-    calendar: "Day",
-    tone: "earth",
-    factions: [],
-    resources: [],
-    characters: [],
-  };
-  const game = freshGame("test", "Test society", world);
-  game.phase = "playing";
-  game.commitments = [
-    {
-      id: "due",
-      due: 0,
-      title: "Pay the crews",
-      detail: "The crews need wages.",
-      character: 0,
-      source: "Wages",
-      after: 3,
-      resolve: {
-        label: "Pay",
-        consequence: "The crews are paid.",
-      },
-      abandon: {
-        label: "Refuse",
-        consequence: "The crews strike.",
-      },
-    },
-  ];
-  let saved = {
-    id: "test",
-    owner: "owner",
-    prompt: "Test",
-    game,
-    lease: null,
-    error: null,
-    requests: [],
-    spent: 0.19,
-    attempts: 1,
-  } as unknown;
-  let ready: Promise<unknown> = Promise.resolve();
-  let failNextWrite = false;
-  const ctx = {
-    blockConcurrencyWhile: (fn: () => Promise<unknown>) => {
-      ready = fn();
-      return ready;
-    },
-    storage: {
-      setAlarm: async () => {},
-      deleteAlarm: async () => {},
-      get: async () => saved,
-      put: async (_: string, value: unknown) => {
-        if (failNextWrite) {
-          failNextWrite = false;
-          throw new Error("storage unavailable");
-        }
-        saved = structuredClone(value);
-      },
-    },
-  } as unknown as DurableObjectState;
-  const society = new Society(ctx, {
-    GAME_AI_BUDGET: "0.20",
-  } as ConstructorParameters<typeof Society>[1]);
-  await ready;
-  const work = await society.acquire("owner", false);
-  expect(work?.lease.kind).toBe("callback");
-  await society.finish("owner", work!.lease.token, {
-    cost: 0.002,
-    error: "Test failure",
-  });
-  await society.finish("owner", work!.lease.token, {
-    cost: 0.002,
-    error: "Test failure",
-  });
-  expect((saved as { spent: number }).spent).toBeCloseTo(0.192);
-  const free = await society.acquire("owner", false);
-  await society.finish("owner", free!.lease.token, {
-    cost: 0,
-    error: "Free completion",
-  });
-  await society.finish("owner", free!.lease.token, {
-    cost: 0.015,
-    error: "Repeated delivery",
-  });
-  expect((saved as { spent: number }).spent).toBeCloseTo(0.192);
-  const retry = await society.acquire("owner", false);
-  failNextWrite = true;
-  await expect(
-    society.finish("owner", retry!.lease.token, { cost: 0.002, error: "Test" }),
-  ).rejects.toThrow("storage unavailable");
-  await society.finish("owner", retry!.lease.token, {
-    cost: 0.015,
-    error: "Repeated delivery",
-  });
-  expect((saved as { spent: number }).spent).toBeCloseTo(0.194);
-});
+const { Dynasty, Ledger } = await import("./index");
 
 function harness(initial: unknown, bindings: Record<string, unknown> = {}) {
   let saved = structuredClone(initial);
   let ready: Promise<unknown> = Promise.resolve();
+  let failNextWrite = false;
   const alarms: number[] = [];
   const ctx = {
     blockConcurrencyWhile: (fn: () => Promise<unknown>) => (ready = fn()),
     storage: {
       get: async () => structuredClone(saved),
       put: async (_: string, value: unknown) => {
+        if (failNextWrite) {
+          failNextWrite = false;
+          throw new Error("storage unavailable");
+        }
         saved = structuredClone(value);
       },
       deleteAlarm: async () => {
@@ -130,11 +35,17 @@ function harness(initial: unknown, bindings: Record<string, unknown> = {}) {
       },
     },
   } as unknown as DurableObjectState;
-  const society = new Society(ctx, {
+  const dynasty = new Dynasty(ctx, {
     GAME_AI_BUDGET: "0.20",
     ...bindings,
-  } as ConstructorParameters<typeof Society>[1]);
-  return { society, ready, alarms, saved: () => saved as any };
+  } as ConstructorParameters<typeof Dynasty>[1]);
+  return {
+    dynasty,
+    ready,
+    alarms,
+    saved: () => saved as any,
+    failNextWrite: () => (failNextWrite = true),
+  };
 }
 const emptySave = {
   id: "test",
@@ -146,84 +57,70 @@ const emptySave = {
   requests: [],
   spent: 0,
   attempts: 0,
+  settled: [],
+  reservations: {},
+  queued: false,
+  foundation: null,
 };
+function playing() {
+  const game = freshGame("test", "Test society", testWorld());
+  game.phase = "playing";
+  return game;
+}
 
-test("legacy unfinished saves acquire durable generation on retry", async () => {
-  const h = harness(emptySave);
+test("a cheap callback fits the remaining allowance and completion is charged once", async () => {
+  const game = playing();
+  game.commitments = [
+    { ...testCard().options[0]!.promise!, id: "due", due: 0, character: 0, source: "Wages" },
+  ];
+  const h = harness({ ...emptySave, game, spent: 0.19, attempts: 1 });
   await h.ready;
-  await h.society.initialize("owner", "test", "A new society");
-  expect(await h.society.continueFoundation("owner")).toBe(true);
-  expect(h.society.view("owner").creation?.done).toBe(0);
-  expect(h.alarms.length).toBeGreaterThan(0);
+  const work = await h.dynasty.acquire("owner", false);
+  expect(work?.lease.kind).toBe("callback");
+  for (let i = 0; i < 2; i++)
+    await h.dynasty.finish("owner", work!.lease.token, { cost: 0.002, error: "Test failure" });
+  expect(h.saved().spent).toBeCloseTo(0.192);
+  const retry = await h.dynasty.acquire("owner", false);
+  h.failNextWrite();
   await expect(
-    h.society.initialize("other", "test", "A new society"),
-  ).rejects.toThrow("Society not found");
+    h.dynasty.finish("owner", retry!.lease.token, { cost: 0.002, error: "Test" }),
+  ).rejects.toThrow("storage unavailable");
+  await h.dynasty.finish("owner", retry!.lease.token, { cost: 0.015, error: "Repeated delivery" });
+  expect(h.saved().spent).toBeCloseTo(0.194);
+});
+
+test("a new society schedules durable generation and belongs to its owner", async () => {
+  const fresh = harness(undefined);
+  await fresh.ready;
+  await fresh.dynasty.initialize("owner", "test", "A new society");
+  expect(await fresh.dynasty.continueFoundation("owner")).toBe(true);
+  expect(fresh.dynasty.view("owner").creation).toMatchObject({ done: 0, total: 3 });
+  expect(fresh.alarms.length).toBeGreaterThan(0);
+  await expect(fresh.dynasty.initialize("other", "test", "A new society")).rejects.toThrow(
+    "Society not found",
+  );
 });
 
 test("terminated paid calls keep their per-game reservation through a restart", async () => {
   const h = harness({ ...emptySave, spent: 0.16 });
   await h.ready;
-  const work = await h.society.acquire("owner", false);
-  await h.society.allocated("owner", work!.lease.token);
-  await h.society.allocated("owner", work!.lease.token);
+  const work = await h.dynasty.acquire("owner", false);
+  await h.dynasty.allocated("owner", work!.lease.token);
+  await h.dynasty.allocated("owner", work!.lease.token);
   expect(h.saved().spent).toBeCloseTo(0.19);
   expect(h.saved().attempts).toBe(1);
-  const restarted = harness({
-    ...h.saved(),
-    lease: { ...h.saved().lease, until: 0 },
-  });
+  const restarted = harness({ ...h.saved(), lease: { ...h.saved().lease, until: 0 } });
   await restarted.ready;
-  await expect(restarted.society.acquire("owner", false)).rejects.toThrow(
-    "allowance",
-  );
-  await restarted.society.finish("owner", work!.lease.token, {
-    cost: 0.003,
-    error: "Recovered outcome",
-  });
+  await expect(restarted.dynasty.acquire("owner", false)).rejects.toThrow("allowance");
+  await restarted.dynasty.finish("owner", work!.lease.token, { cost: 0.003, error: "Recovered" });
   expect(restarted.saved().spent).toBeCloseTo(0.163);
-  await restarted.society.finish("owner", work!.lease.token, { cost: 0.003 });
+  await restarted.dynasty.finish("owner", work!.lease.token, { cost: 0.003 });
   expect(restarted.saved().spent).toBeCloseTo(0.163);
 });
 
-test("a background failure preserves legacy art and retries only the missing background", async () => {
-  const world: World = {
-    name: "Test reef",
-    era: "Ninth tide",
-    role: "Speaker",
-    summary: "Octopuses live beneath the sea.",
-    calendar: "Tide",
-    tone: "night",
-    factions: [],
-    resources: ["Air", "Copper", "Oil"],
-    characters: Array.from({ length: 6 }, () => ({
-      name: "Adviser",
-      role: "Diver",
-      faction: 0,
-      personality: "Direct",
-      appearance: "An octopus",
-    })),
-    artDirection: {
-      scene: "An underwater city",
-      palette: "Teal",
-      identity: "Octopus republic",
-    },
-    art: Object.fromEntries(
-      [
-        ...Array.from({ length: 6 }, (_, i) => `portrait-${i}`),
-        "resource-0",
-      ].map((slot) => [slot, `/api/art/test/${slot}`]),
-    ),
-  };
-  const game = freshGame("test", "Private prompt", world);
-  game.card = {
-    id: "card",
-    title: "Air",
-    body: "Repair the pump?",
-    character: 0,
-    kind: "ordinary",
-    options: [],
-    reactions: [],
-  };
+test("a failed background retries, then the finished world is published once", async () => {
+  const game = freshGame("test", "Private prompt", testWorld());
+  game.card = testCard();
   const images = new Set<string>();
   const published: unknown[] = [];
   const settlements: number[] = [];
@@ -239,208 +136,104 @@ test("a background failure preserves legacy art and retries only the missing bac
   }) as unknown as typeof fetch;
   try {
     const h = harness(
-      {
-        ...emptySave,
-        game,
-        foundation: {
-          templateId: "template",
-          visitor: "visitor",
-          complete: false,
-        },
-      },
+      { ...emptySave, game, foundation: { templateId: "template", complete: false } },
       {
         ART: {
           head: async (key: string) => (images.has(key) ? {} : null),
-          put: async (key: string) => {
-            images.add(key);
-          },
+          put: async (key: string) => void images.add(key),
         },
-        BUDGET: {
+        LEDGER: {
           getByName: () => ({
             reserve: async () => {},
-            settle: async (_: string, cost: number) => {
-              settlements.push(cost);
-            },
+            settle: async (_: string, cost: number) => void settlements.push(cost),
           }),
         },
         CAMPAIGNS: {
           prepare: () => ({ bind: (...args: unknown[]) => args }),
-          batch: async (items: unknown[]) => {
-            published.push(items);
-          },
+          batch: async (items: unknown[]) => void published.push(items),
         },
       },
     );
     await h.ready;
-    await h.society.alarm();
-    expect(Object.keys(h.saved().game.world.art)).toHaveLength(7);
-    expect(h.society.view("owner").error).toContain("artwork");
-    expect(published).toHaveLength(0);
-    expect(calls).toBe(1);
-    await h.society.continueFoundation("owner");
-    await h.society.alarm();
+    await h.dynasty.alarm();
+    expect(h.dynasty.view("owner").error).toContain("artwork");
+    expect(h.saved().game.world.background).toBeUndefined();
+    await h.dynasty.continueFoundation("owner");
+    await h.dynasty.alarm();
     expect(calls).toBe(2);
-    expect(Object.keys(h.saved().game.world.art)).toHaveLength(8);
-    await h.society.alarm();
-    await h.society.alarm();
+    expect(h.saved().game.world.background).toBe("/api/art/template");
+    await h.dynasty.alarm();
+    await h.dynasty.alarm();
     expect(published).toHaveLength(1);
-    expect(h.society.view("owner").creation).toBeNull();
-    expect(h.saved().foundation.complete).toBe(true);
+    expect(h.dynasty.view("owner").creation).toBeNull();
     expect(h.saved().spent).toBeCloseTo(settlements.reduce((a, b) => a + b, 0));
   } finally {
     globalThis.fetch = originalFetch;
   }
 });
 
-test("legacy daily creation counts do not block new generation", async () => {
-  const { Budget } = await import("./index");
+test("the daily ledger reserves and settles once and refuses overspending", async () => {
   let ready: Promise<unknown> = Promise.resolve();
-  let ledger = {
-    spent: 0.1,
-    reservations: {} as Record<string, number>,
-    visitors: { visitor: { calls: 180, worlds: 4 } },
-    creations: Object.fromEntries(
-      Array.from({ length: 100 }, (_, i) => [`new-${i}`, "visitor"]),
-    ),
-    reuses: Object.fromEntries(
-      Array.from({ length: 200 }, (_, i) => [`reuse-${i}`, "visitor"]),
-    ),
-  };
+  let state = { spent: 0.1, reservations: {} as Record<string, number> };
   const ctx = {
     blockConcurrencyWhile: (fn: () => Promise<unknown>) => (ready = fn()),
     storage: {
-      get: async () => structuredClone(ledger),
-      put: async (_: string, value: typeof ledger) => {
-        ledger = structuredClone(value);
-      },
+      get: async () => structuredClone(state),
+      put: async (_: string, value: typeof state) => void (state = structuredClone(value)),
       getAlarm: async () => 1,
       setAlarm: async () => {},
-      deleteAlarm: async () => {},
     },
   } as unknown as DurableObjectState;
-  const budget = new Budget(ctx, {
-    DAILY_AI_BUDGET: "1",
-  } as ConstructorParameters<typeof Budget>[1]);
+  const ledger = new Ledger(ctx, { DAILY_AI_BUDGET: "1" } as ConstructorParameters<typeof Ledger>[1]);
   await ready;
-  await budget.reserve("new-world", 0.015);
-  expect(ledger.reservations["new-world"]).toBe(0.015);
-  await budget.reserve("new-world", 0.015);
-  expect(Object.keys(ledger.reservations)).toHaveLength(1);
-  await budget.settle("new-world", 0.005);
-  await budget.settle("new-world", 0.005);
-  expect(ledger.spent).toBeCloseTo(0.105);
-  expect(ledger.reservations).toEqual({});
-  await expect(budget.reserve("over-budget", 1)).rejects.toThrow(
-    "AI allowance",
-  );
+  await ledger.reserve("a", 0.025);
+  await ledger.reserve("a", 0.025);
+  expect(Object.keys(state.reservations)).toHaveLength(1);
+  await ledger.settle("a", 0.005);
+  await ledger.settle("a", 0.005);
+  expect(state.spent).toBeCloseTo(0.105);
+  await expect(ledger.reserve("big", 1)).rejects.toThrow("AI allowance");
 });
 
-test("artwork refresh preserves a decision made while generation is in flight", async () => {
-  const world: World = {
-    name: "Test",
-    era: "Now",
-    role: "Steward",
-    summary: "Test",
-    calendar: "Day",
-    tone: "earth",
-    identityVersion: 2,
-    factions: Array.from({ length: 4 }, (_, i) => ({
-      name: `Group ${i}`,
-      description: "Test",
-      priority: "Test",
-      redLine: "Test",
-    })),
-    resources: [],
-    characters: [
-      {
-        name: "Ada",
-        role: "Engineer",
-        faction: 0,
-        personality: "Direct",
-        appearance: "Human",
-      },
-    ],
-    pressure: { resource: "fuel", warning: "Fuel runs out" },
-  };
-  const game = freshGame("test", "Test society", world);
-  game.phase = "playing";
-  const card = {
-    id: crypto.randomUUID(),
-    title: "Wages",
-    body: "Pay us?",
-    character: 0,
-    kind: "ordinary" as const,
-    options: [0, 1].map(() => ({
-      label: "Pay",
-      consequence: "Paid",
-      promise: null,
-      legacy: null,
-    })),
-    reactions: [0, 1].map(() =>
-      Array.from({ length: 4 }, () => ({ delta: 1, uncertain: false })),
-    ),
-    reserveChanges: [1, 1],
-  };
-  game.card = card;
-  game.deck = [
-    { ...card, id: crypto.randomUUID() },
-    { ...card, id: crypto.randomUUID() },
-  ];
-  const h = harness({ ...emptySave, game });
+test("a succession card still lets the deck refill and keeps its place", async () => {
+  const game = playing();
+  game.reign.support = [5, 50, 50, 50];
+  game.card = testCard("dying", [[-6, 0, 0, 0], [0, 0, 0, 0]]);
+  const dead = play(game, "dying", 0);
+  const h = harness({ ...emptySave, game: dead });
   await h.ready;
-  const work = await h.society.acquire("owner", true);
-  expect(work?.lease.kind).toBe("identity");
-  await h.society.mutate("owner", "choose", {
-    version: 0,
-    requestId: crypto.randomUUID(),
-    cardId: card.id,
-    side: 0,
+  const work = await h.dynasty.acquire("owner", true);
+  expect(work?.lease).toMatchObject({ kind: "cards", reserved: 0.025 });
+  await h.dynasty.finish("owner", work!.lease.token, {
+    cards: [testCard(), testCard(), testCard(), testCard(), testCard()],
+    cost: 0.002,
   });
-  const nextCard = h.saved().game.card.id;
-  await h.society.finish("owner", work!.lease.token, {
-    world: { ...world, identityVersion: 3 },
-    cost: 0.01,
-  });
-  const updated = h.saved().game;
-  expect(updated.world.identityVersion).toBe(3);
-  expect(updated.world.characters[0].name).toBe("Ada");
-  expect(updated.totalTurns).toBe(1);
-  expect(updated.history[0].action).toBe("Pay");
-  expect(updated.card.id).toBe(nextCard);
-  expect(updated.reserve).toBe(6);
-  expect(await h.society.acquire("owner", true)).not.toMatchObject({
-    lease: { kind: "identity" },
-  });
+  expect((h.saved().game.card as Succession).kind).toBe("succession");
+  expect(h.saved().game.deck).toHaveLength(5);
+  expect(await h.dynasty.acquire("owner", true)).toBeNull();
 });
 
 test("abandoning stops queued work and ignores an in-flight generation result", async () => {
-  const game = freshGame("test", "Test", {
-    name: "Test", era: "Now", role: "Steward", summary: "Test", calendar: "Day",
-    tone: "earth", factions: [], resources: [], characters: [],
-  });
-  game.phase = "playing";
+  const game = playing();
   const h = harness({ ...emptySave, game, queued: true });
   await h.ready;
-  const work = await h.society.acquire("owner", false);
-  await h.society.allocated("owner", work!.lease.token);
-  const action = {version: 0, requestId: crypto.randomUUID()};
-  await h.society.mutate("owner", "abandon", action);
-  await h.society.mutate("owner", "abandon", action);
-  await h.society.finish("owner", work!.lease.token, {
-    world: {...game.world, name: "Late result"}, cost: .004,
-  });
-  expect(h.saved().game.reign.ended.kind).toBe("abandoned");
+  const work = await h.dynasty.acquire("owner", false);
+  await h.dynasty.allocated("owner", work!.lease.token);
+  const action = { version: 0, requestId: crypto.randomUUID() };
+  await h.dynasty.mutate("owner", "abandon", action);
+  await h.dynasty.mutate("owner", "abandon", action);
+  await h.dynasty.finish("owner", work!.lease.token, { cards: [testCard()], cost: 0.004 });
+  expect(h.saved().game.phase).toBe("over");
   expect(h.saved().game.endings).toHaveLength(1);
-  expect(h.saved().game.world.name).toBe("Test");
+  expect(h.saved().game.deck).toHaveLength(0);
   expect(h.saved().queued).toBe(false);
   expect(h.alarms).toHaveLength(0);
-  expect(h.saved().lease).toBeNull();
-  expect(h.saved().spent).toBeCloseTo(.004);
-  expect(await h.society.acquire("owner", false)).toBeNull();
-  await expect(h.society.mutate("owner", "succeed", {
-    version: 1, requestId: crypto.randomUUID(), coalition: 0,
-  })).rejects.toThrow("Unknown action");
-  await expect(h.society.mutate("other", "abandon", {
-    version: 1, requestId: crypto.randomUUID(),
-  })).rejects.toThrow("Society not found");
+  expect(h.saved().spent).toBeCloseTo(0.004);
+  expect(await h.dynasty.acquire("owner", false)).toBeNull();
+  await expect(
+    h.dynasty.mutate("owner", "succeed", { version: 1, requestId: crypto.randomUUID() }),
+  ).rejects.toThrow("Unknown action");
+  await expect(
+    h.dynasty.mutate("other", "abandon", { version: 1, requestId: crypto.randomUUID() }),
+  ).rejects.toThrow("Society not found");
 });

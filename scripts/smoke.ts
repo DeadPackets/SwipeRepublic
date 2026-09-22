@@ -90,7 +90,7 @@ if (mode === "create") {
   for (let i = 0; i < turns; i++) {
     let state = (await request(`/api/games/${saved.id}`)).value;
     const started = Date.now();
-    while (!state.game?.card && !state.game?.reign.ended) {
+    while (!state.game?.card && state.game?.phase !== "over") {
       assert.ok(!state.error, state.error);
       assert.ok(Date.now() - started < 90000, "Preparation deadline");
       if (state.busy) {
@@ -100,15 +100,9 @@ if (mode === "create") {
         state = (await request(`/api/games/${saved.id}/prepare`, {})).value;
     }
     saved.game = state.game;
-    if (state.game.reign.ended) {
-      console.log(JSON.stringify({ ending: state.game.reign.ended }));
-      break;
-    }
+    if (state.game.phase === "over") break;
     const g = state.game;
-    const utilities = g.card.reactions.map((rs: any[], side: number) =>
-      Math.min(...rs.map((r, f) => g.reign.support[f] + r.delta)),
-    );
-    const side = utilities[1] > utilities[0] ? 1 : 0;
+    const side = g.card.kind === "succession" ? 0 : i % 2;
     const body = {
       cardId: g.card.id,
       side,
@@ -124,16 +118,14 @@ if (mode === "create") {
     console.log(
       JSON.stringify({
         turn: saved.game.totalTurns,
-        title: g.card.title,
+        title: g.card.title ?? "Succession",
         callback: !!g.card.commitmentId,
         waitMs: Date.now() - started,
         support: saved.game.reign.support,
       }),
     );
-    if (saved.game.reign.ended) {
-      console.log(JSON.stringify({ ending: saved.game.reign.ended }));
-      break;
-    }
+    if (saved.game.endings.length > g.endings.length)
+      console.log(JSON.stringify({ death: saved.game.endings.at(-1) }));
   }
 
 }

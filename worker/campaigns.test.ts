@@ -4,8 +4,9 @@ import {
   qualifyingMatches,
   type CampaignCandidate,
 } from "./campaigns";
-import { artTasks } from "./art";
-import type { Card, World } from "../src/game";
+import { backgroundPrompt } from "./art";
+import type { Card } from "../src/game";
+import { testWorld } from "../src/testWorld";
 
 const candidates: CampaignCandidate[] = Array.from({ length: 5 }, (_, i) => ({
   id: String(i),
@@ -20,29 +21,7 @@ test("only finite similarity scores strictly above 85 qualify, independent of co
   expect(matches.every((m) => !("identity" in m))).toBe(true);
 });
 
-const world: World = {
-  name: "Glass reef",
-  era: "The ninth tide",
-  role: "Speaker",
-  calendar: "Tide",
-  tone: "night",
-  summary: "Octopuses govern a drowned city.",
-  factions: [],
-  resources: ["Air", "Copper", "Algae"],
-  characters: Array.from({ length: 6 }, (_, i) => ({
-    name: `Adviser ${i}`,
-    role: "Diver",
-    faction: i % 4,
-    personality: "Direct",
-    appearance: "An elderly octopus wearing a copper diving hood",
-  })),
-  artDirection: {
-    scene: "Copper bells beneath a black ocean",
-    palette: "Teal and copper",
-    identity: "An underwater octopus republic",
-  },
-  art: { background: "/api/art/template/background" },
-};
+const world = { ...testWorld(), background: "/api/art/template" };
 const card = {
   id: "shared-card",
   title: "The air",
@@ -69,15 +48,14 @@ test("campaign reuse creates independent private reigns and unique cards while s
   expect(second.reign.support).toEqual([50, 50, 50, 50]);
   expect(second.history).toHaveLength(0);
   expect(second.commitments).toHaveLength(0);
-  expect(second.world.characters[0]!.name).toBe("Adviser 0");
+  expect(second.world.characters[0]!.name).toBe("Person 0");
   expect(first.card!.id).not.toBe(second.card!.id);
   expect(second.card!.id).not.toBe(card.id);
-  expect(second.world.art!.background).toBe(world.art!.background);
+  expect(second.world.background).toBe(world.background);
   expect(template.cards[0]!.id).toBe("shared-card");
 });
-test("only the world background uses an image call", () => {
-  const tasks = artTasks(world);
-  expect(tasks.map((t) => t.slot)).toEqual(["background"]);
-  expect(tasks[0]!.prompt).toContain(world.summary);
-  expect(tasks[0]!.prompt).toContain(world.artDirection!.scene);
+test("the background prompt carries the world's own scene", () => {
+  const prompt = backgroundPrompt(world);
+  expect(prompt).toContain(world.summary);
+  expect(prompt).toContain(world.artDirection.scene);
 });

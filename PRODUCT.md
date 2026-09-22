@@ -10,7 +10,7 @@ People playing short browser sessions on phones or desktops. They describe a soc
 
 ## Product Purpose
 
-A Reigns-style game with player-defined settings, recurring characters, four competing factions, and consequences that persist throughout a run. Engagement comes from difficult choices, promises returning, and surviving in power.
+A Reigns-style game with player-defined settings, recurring characters, four competing factions, and consequences that persist across rulers. Engagement comes from difficult choices, promises returning, surviving in power, and collecting the ways a ruler can fall.
 
 ## Brand Personality
 
@@ -28,7 +28,8 @@ Generic SaaS dashboards, cheerful toy portraits, ornamental metric cards, purple
 - Make faction pressure legible before a choice and its effect clear afterward.
 - Give arrivals, decisions, and endings distinct motion.
 - The player defines any society. Never constrain the world to supported presets.
-- Reigns continue until support collapses or essential reserves run out; there are no assigned aims or fixed turn limits.
+- A reign ends when any faction reaches 0 or 100 support. The dynasty continues through a chosen successor; there are no assigned aims or fixed turn limits.
+- Previews show who reacts and how much, never which way. The gamble is the game.
 - Generate bespoke artwork once per society template, then reuse it. Keep private reigns separate.
 
 ## Accessibility & Inclusion

@@ -1,30 +1,12 @@
 import { z } from "zod";
 
 const short = (max: number) => z.string().min(1).max(max);
-export const polygonSchema = z.object({
-  points: z
-    .array(z.array(z.number().min(0).max(100)).length(2))
-    .min(3)
-    .max(12),
-  fill: z.string().regex(/^#[0-9a-fA-F]{6}$/),
-});
+const hex = z.string().regex(/^#[0-9a-fA-F]{6}$/);
+const arity: Record<string, number> = { M: 2, L: 2, H: 1, V: 1, C: 6, Q: 4, Z: 0 };
 function validPath(d: string) {
-  const arity: Record<string, number> = {
-    M: 2,
-    L: 2,
-    H: 1,
-    V: 1,
-    C: 6,
-    Q: 4,
-    Z: 0,
-  };
   return [...d.matchAll(/([MLHVQCZ])([^MLHVQCZ]*)/g)].every(
     ([, command, args]) => {
-      const values = args!
-        .trim()
-        .split(/[\s,]+/)
-        .filter(Boolean)
-        .map(Number);
+      const values = args!.trim().split(/[\s,]+/).filter(Boolean).map(Number);
       const count = arity[command!]!;
       return (
         (count === 0
@@ -44,25 +26,25 @@ export const vectorShapeSchema = z.object({
       validPath,
       "Use complete absolute path commands with coordinates from 0 to 100",
     ),
-  fill: z.string().regex(/^#[0-9a-fA-F]{6}$/),
+  fill: hex,
 });
-export const vectorGraphicSchema = z.array(vectorShapeSchema).min(1).max(14);
-export const graphicSchema = z
-  .array(z.union([vectorShapeSchema, polygonSchema]))
-  .min(1)
-  .max(14);
+export const graphicSchema = z.array(vectorShapeSchema).min(1).max(14);
 export type Graphic = z.infer<typeof graphicSchema>;
-export const WORLD_IDENTITY_VERSION = 3;
+
+const deathSchema = z.object({
+  title: short(40).describe("A one-line gallows-humor name for this death"),
+  reason: short(120).describe("One sentence: what this faction did to the ruler"),
+});
 export const factionSchema = z.object({
   name: short(32),
   description: short(160),
   priority: short(120),
   redLine: short(120),
-});
-export const factionIdentitySchema = z.object({
   label: short(16),
-  color: z.string().regex(/^#[0-9a-fA-F]{6}$/),
-  symbol: vectorGraphicSchema,
+  color: hex,
+  symbol: graphicSchema,
+  collapse: deathSchema.describe("How the ruler dies when this faction's support reaches 0"),
+  excess: deathSchema.describe("How the ruler dies when this faction's support reaches 100: too much of their love or control"),
 });
 export const characterSchema = z.object({
   name: short(40),
@@ -70,15 +52,9 @@ export const characterSchema = z.object({
   faction: z.number().int().min(0).max(3),
   personality: short(120),
   appearance: short(400),
-});
-export const characterIdentitySchema = z.object({
   voice: short(100),
   relationship: short(160),
-  silhouette: vectorGraphicSchema,
-});
-export const pressureSchema = z.object({
-  resource: short(28),
-  warning: short(60),
+  silhouette: graphicSchema,
 });
 export const worldSchema = z.object({
   name: short(70),
@@ -86,47 +62,18 @@ export const worldSchema = z.object({
   role: short(70),
   summary: short(450),
   calendar: short(20),
-  tone: z.enum(["earth", "mars", "night", "forest"]),
-  factions: z.array(factionSchema.merge(factionIdentitySchema)).length(4),
-  resources: z.array(short(28)).length(3),
-  characters: z
-    .array(characterSchema.merge(characterIdentitySchema))
-    .length(24),
-  pressure: pressureSchema,
+  factions: z.array(factionSchema).length(4),
+  characters: z.array(characterSchema).length(24),
   artDirection: z.object({
     scene: short(700),
     palette: short(160),
     identity: short(300),
   }),
 });
-type GeneratedWorld = z.infer<typeof worldSchema>;
-export type World = Omit<
-  GeneratedWorld,
-  "artDirection" | "characters" | "factions" | "pressure"
-> & {
-  identityVersion?: number;
-  artDirection?: GeneratedWorld["artDirection"];
-  pressure?: GeneratedWorld["pressure"];
-  factions: (z.infer<typeof factionSchema> &
-    Partial<
-      Omit<z.infer<typeof factionIdentitySchema>, "symbol"> & {
-        symbol: Graphic;
-      }
-    >)[];
-  characters: (z.infer<typeof characterSchema> &
-    Partial<
-      Omit<z.infer<typeof characterIdentitySchema>, "silhouette"> & {
-        silhouette: Graphic;
-      }
-    > & {
-      portrait?: number | null;
-    })[];
-  art?: Record<string, string>;
-};
-const actionSchema = z.object({
-  label: short(55),
-  consequence: short(180),
-});
+export type World = z.infer<typeof worldSchema> & { background?: string };
+export type Faction = World["factions"][number];
+
+const actionSchema = z.object({ label: short(55), consequence: short(180) });
 export const promiseSchema = z.object({
   title: short(70),
   detail: short(250),
@@ -154,7 +101,11 @@ export type Card = Draft & {
   id: string;
   reactions: Reaction[][];
   commitmentId?: string;
-  reserveChanges?: number[];
+};
+export type Succession = {
+  id: string;
+  kind: "succession";
+  candidates: [number, number];
 };
 export type Commitment = z.infer<typeof promiseSchema> & {
   id: string;
@@ -172,18 +123,13 @@ export type Event = {
   deltas: number[];
 };
 export type Ending = {
-  kind: "fall" | "retired" | "term" | "abandoned";
+  kind: "collapse" | "excess" | "abandoned";
+  faction: number | null;
   title: string;
   reason: string;
-  turn: number;
-  ruler: string;
-};
-export type Reign = {
-  number: number;
-  ruler: string;
-  turn: number;
-  support: number[];
-  ended: Ending | null;
+  reign: number;
+  turns: number;
+  year: number;
 };
 export type Game = {
   id: string;
@@ -191,22 +137,28 @@ export type Game = {
   world: World;
   version: number;
   totalTurns: number;
-  reign: Reign;
-  card: Card | null;
+  reign: { number: number; turn: number; support: number[] };
+  card: Card | Succession | null;
   deck: Card[];
   commitments: Commitment[];
   legacies: string[];
   history: Event[];
   endings: Ending[];
-  phase: "intro" | "playing";
+  phase: "intro" | "playing" | "over";
   cost: number;
   generations: number;
-  reserve?: number;
 };
-export type PublicGame = Omit<Game, "deck" | "cost" | "generations"> & {
+export type PublicReaction = { size: "small" | "large"; uncertain: boolean } | null;
+export type PublicCard = Omit<Card, "reactions"> & { reactions: PublicReaction[][] };
+export type PublicGame = Omit<Game, "deck" | "cost" | "generations" | "card"> & {
+  card: PublicCard | Succession | null;
   preparing: boolean;
-  nextPortrait?: string;
 };
+
+export const LARGE_REACTION = 10;
+const BACKER = 65;
+const RIVAL = 40;
+
 export function freshGame(id: string, prompt: string, world: World): Game {
   return {
     id,
@@ -214,13 +166,7 @@ export function freshGame(id: string, prompt: string, world: World): Game {
     world,
     version: 0,
     totalTurns: 0,
-    reign: {
-      number: 1,
-      ruler: world.role,
-      turn: 0,
-      support: [50, 50, 50, 50],
-      ended: null,
-    },
+    reign: { number: 1, turn: 0, support: [50, 50, 50, 50] },
     card: null,
     deck: [],
     commitments: [],
@@ -230,46 +176,57 @@ export function freshGame(id: string, prompt: string, world: World): Game {
     phase: "intro",
     cost: 0,
     generations: 0,
-    ...(world.pressure ? { reserve: 6 } : {}),
   };
 }
-function end(game: Game, kind: Ending["kind"], title: string, reason: string) {
-  const ending = {
-    kind,
-    title,
-    reason,
-    turn: game.reign.turn,
-    ruler: game.reign.ruler,
-  };
-  game.reign.ended = ending;
-  game.endings.push(ending);
-  game.card = null;
-  game.deck = [];
+
+function nextCard(g: Game) {
+  g.card = nextDraft(g)?.commitmentId ? null : (g.deck.shift() ?? null);
+}
+
+function succession(support: number[], fatal: number): Succession {
+  const [a, b] = [0, 1, 2, 3]
+    .filter((i) => i !== fatal)
+    .sort((x, y) => support[y]! - support[x]! || x - y);
+  return { id: crypto.randomUUID(), kind: "succession", candidates: [a!, b!] };
 }
 
 export function play(game: Game, cardId: string, side: Side): Game {
   if (
     game.phase !== "playing" ||
-    game.reign.ended ||
     !game.card ||
     game.card.id !== cardId ||
     (side !== 0 && side !== 1)
   )
     throw new Error("This decision has already passed. Refresh your society.");
   const g = structuredClone(game);
+  g.version++;
   const card = g.card!;
-  const option = card.options[side]!;
-  const deltas = card.reactions[side]!.map((r) => r.delta);
-  const raw = g.reign.support.map((n, i) => n + deltas[i]!);
-  g.reign.support = raw.map((n) => Math.max(0, Math.min(100, n)));
-  if (g.reserve !== undefined)
-    g.reserve = Math.max(
-      0,
-      Math.min(8, g.reserve - 1 + (card.reserveChanges?.[side] ?? 1)),
+  const before = g.reign.support;
+  if (card.kind === "succession") {
+    const backer = card.candidates[side];
+    const rival = card.candidates[side === 0 ? 1 : 0];
+    const support = before.map((_, i) =>
+      i === backer ? BACKER : i === rival ? RIVAL : 50,
     );
+    g.reign = { number: g.reign.number + 1, turn: 0, support };
+    g.history.push({
+      turn: g.totalTurns,
+      reign: g.reign.number,
+      title: "A new ruler takes office",
+      action: `Backed by the ${g.world.factions[backer]!.name}`,
+      consequence: `The ${g.world.factions[rival]!.name} lost the vote.`,
+      deltas: support.map((v, i) => v - before[i]!),
+    });
+    nextCard(g);
+    return g;
+  }
+  const option = card.options[side]!;
+  const support = before.map((n, i) =>
+    Math.max(0, Math.min(100, n + card.reactions[side]![i]!.delta)),
+  );
+  g.reign.support = support;
   g.totalTurns++;
   g.reign.turn++;
-  g.version++;
   if (card.commitmentId)
     g.commitments = g.commitments.filter((p) => p.id !== card.commitmentId);
   if (option.promise && g.commitments.length < 3)
@@ -289,45 +246,46 @@ export function play(game: Game, cardId: string, side: Side): Game {
     character: card.character,
     action: option.label,
     consequence: option.consequence,
-    deltas: g.reign.support.map((value, i) => value - game.reign.support[i]!),
+    deltas: support.map((v, i) => v - before[i]!),
   });
   g.history = g.history.slice(-180);
-  g.card = null;
-  const fallen = raw
-    .map((n, i) => ({ n, i }))
-    .filter((f) => f.n <= 0)
-    .sort((a, b) => a.n - b.n || a.i - b.i);
-  if (fallen.length) {
-    const names = fallen.map((f) => g.world.factions[f.i]!.name).join(" and ");
-    end(
-      g,
-      "fall",
-      "Removed from office",
-      `${names} withdrew their support. ${option.consequence}`,
-    );
-  } else if (g.reserve === 0 && g.world.pressure) {
-    end(
-      g,
-      "fall",
-      "The reserves are gone",
-      `${g.world.pressure.warning}. ${option.consequence}`,
-    );
-  } else if (!nextDraft(g)?.commitmentId) {
-    g.card = g.deck.shift() ?? null;
+  const collapsed = support.findIndex((v) => v <= 0);
+  const fatal = collapsed >= 0 ? collapsed : support.findIndex((v) => v >= 100);
+  if (fatal < 0) {
+    nextCard(g);
+    return g;
   }
+  const kind = collapsed >= 0 ? "collapse" : "excess";
+  const death = g.world.factions[fatal]![kind];
+  g.endings.push({
+    kind,
+    faction: fatal,
+    title: death.title,
+    reason: death.reason,
+    reign: g.reign.number,
+    turns: g.reign.turn,
+    year: g.totalTurns,
+  });
+  g.card = succession(support, fatal);
   return g;
 }
 
 export function abandon(game: Game): Game {
-  if (game.phase !== "playing" || game.reign.ended)
-    throw new Error("This run has already ended.");
+  if (game.phase !== "playing")
+    throw new Error("This dynasty has already ended.");
   const g = structuredClone(game);
-  end(
-    g,
-    "abandoned",
-    "Run abandoned",
-    "You left office. This run is over; your chronicle is saved.",
-  );
+  g.endings.push({
+    kind: "abandoned",
+    faction: null,
+    title: "The dynasty ends",
+    reason: "You left office. Your chronicle is saved.",
+    reign: g.reign.number,
+    turns: g.reign.turn,
+    year: g.totalTurns,
+  });
+  g.phase = "over";
+  g.card = null;
+  g.deck = [];
   g.version++;
   return g;
 }
@@ -355,17 +313,25 @@ export function nextDraft(
 }
 
 export function publicGame(game: Game, preparing = false): PublicGame {
-  const {
-    deck: _deck,
-    cost: _cost,
-    generations: _generations,
-    ...visible
-  } = game;
+  const { deck: _d, cost: _c, generations: _g, card, ...visible } = game;
   return {
     ...visible,
     preparing,
-    nextPortrait: game.deck[0]
-      ? game.world.art?.[`portrait-${game.deck[0].character}`]
-      : undefined,
+    card:
+      card && card.kind !== "succession"
+        ? {
+            ...card,
+            reactions: card.reactions.map((side) =>
+              side.map((r) =>
+                r.delta
+                  ? {
+                      size: Math.abs(r.delta) >= LARGE_REACTION ? "large" : "small",
+                      uncertain: r.uncertain,
+                    }
+                  : null,
+              ),
+            ),
+          }
+        : card,
   };
 }

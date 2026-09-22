@@ -35,3 +35,12 @@ The user confirmed a second permanent purge of all production runs, chronicles, 
 Succession is removed from the UI and API. Defeat is permanent. Menu → Abandon run requires confirmation, stops queued generation, returns home and preserves the chronicle. The backend rejects further choices, ignores late generation results and handles duplicate abandonment requests without creating duplicate endings. The removed succession route returns 404.
 
 Validation: 25 tests / 134 assertions and the production build pass. Desktop and 375 px browser checks cover cancellation, confirmed abandonment, returning home, reopening the finished run, reading its preserved chronicle and defeat without successors. A simulated lost response after a successful save recovers on retry with exactly one abandonment and the original history intact.
+
+## Third purge: dynasty rules (2026-09-23)
+
+The user approved wiping production for the dynasty redesign. No compatibility layer was kept.
+
+- Inventory before the wipe: 0 campaigns, 0 search rows, 0 R2 objects.
+- D1: dropped `campaigns`, `campaign_search` and `d1_migrations`, then reapplied `0001_campaigns.sql`, which no longer has a `version` column.
+- Durable Objects: two deploys, because one migration cannot both create and delete classes. `v6-dynasty-create` added `Dynasty` and `Ledger` while stub `SocietyV3` and `Budget` classes stayed exported (version `76b60a2a-2820-4892-969f-2468783127e7`). `v7-dynasty-delete` then deleted both old classes and removed the stubs (version `0951d8b1-f579-4c4c-8d6d-deb0fbc4d94c`). The daily spend ledger restarts empty.
+- Verification: health 200, welcome 200, unknown artwork 404, matching empty. The live campaign smoke test passed all 6 checks in 140 s and published one template ("Observatory Republic").
