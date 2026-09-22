@@ -1,11 +1,41 @@
 import { z } from "zod";
 
 const short = (max: number) => z.string().min(1).max(max);
+export const polygonSchema = z.object({
+  points: z
+    .array(z.array(z.number().min(0).max(100)).length(2))
+    .min(3)
+    .max(12),
+  fill: z.string().regex(/^#[0-9a-fA-F]{6}$/),
+});
+export const graphicSchema = z.array(polygonSchema).min(1).max(10);
+export type Graphic = z.infer<typeof graphicSchema>;
 export const factionSchema = z.object({
   name: short(32),
   description: short(160),
   priority: short(120),
   redLine: short(120),
+});
+export const factionIdentitySchema = z.object({
+  label: short(16),
+  color: z.string().regex(/^#[0-9a-fA-F]{6}$/),
+  symbol: graphicSchema,
+});
+export const characterSchema = z.object({
+  name: short(40),
+  role: short(50),
+  faction: z.number().int().min(0).max(3),
+  personality: short(120),
+  appearance: short(400),
+});
+export const characterIdentitySchema = z.object({
+  voice: short(100),
+  relationship: short(160),
+  silhouette: graphicSchema,
+});
+export const pressureSchema = z.object({
+  resource: short(28),
+  warning: short(60),
 });
 export const worldSchema = z.object({
   name: short(70),
@@ -14,19 +44,12 @@ export const worldSchema = z.object({
   summary: short(450),
   calendar: short(20),
   tone: z.enum(["earth", "mars", "night", "forest"]),
-  factions: z.array(factionSchema).length(4),
+  factions: z.array(factionSchema.merge(factionIdentitySchema)).length(4),
   resources: z.array(short(28)).length(3),
   characters: z
-    .array(
-      z.object({
-        name: short(40),
-        role: short(50),
-        faction: z.number().int().min(0).max(3),
-        personality: short(120),
-        appearance: short(400),
-      }),
-    )
-    .length(6),
+    .array(characterSchema.merge(characterIdentitySchema))
+    .length(24),
+  pressure: pressureSchema,
   artDirection: z.object({
     scene: short(700),
     palette: short(160),
@@ -34,11 +57,19 @@ export const worldSchema = z.object({
   }),
 });
 type GeneratedWorld = z.infer<typeof worldSchema>;
-export type World = Omit<GeneratedWorld, "artDirection" | "characters"> & {
+export type World = Omit<
+  GeneratedWorld,
+  "artDirection" | "characters" | "factions" | "pressure"
+> & {
+  identityVersion?: number;
   artDirection?: GeneratedWorld["artDirection"];
-  characters: (GeneratedWorld["characters"][number] & {
-    portrait?: number | null;
-  })[];
+  pressure?: GeneratedWorld["pressure"];
+  factions: (z.infer<typeof factionSchema> &
+    Partial<z.infer<typeof factionIdentitySchema>>)[];
+  characters: (z.infer<typeof characterSchema> &
+    Partial<z.infer<typeof characterIdentitySchema>> & {
+      portrait?: number | null;
+    })[];
   art?: Record<string, string>;
 };
 const actionSchema = z.object({
@@ -58,8 +89,10 @@ export const optionSchema = actionSchema.extend({
 });
 export const draftSchema = z.object({
   title: short(55),
-  body: short(320),
-  character: z.number().int().min(0).max(5),
+  body: short(320).describe(
+    "Only the character’s exact spoken words to the ruler. No narrator, speaker label, stage directions or third-person speech report.",
+  ),
+  character: z.number().int().nonnegative(),
   kind: z.enum(["ordinary", "major", "relief"]),
   options: z.array(optionSchema).length(2),
 });
@@ -70,6 +103,7 @@ export type Card = Draft & {
   id: string;
   reactions: Reaction[][];
   commitmentId?: string;
+  reserveChanges?: number[];
 };
 export type Commitment = z.infer<typeof promiseSchema> & {
   id: string;
@@ -81,6 +115,7 @@ export type Event = {
   turn: number;
   reign: number;
   title: string;
+  character?: number;
   action: string;
   consequence: string;
   deltas: number[];
@@ -115,6 +150,7 @@ export type Game = {
   phase: "intro" | "playing";
   cost: number;
   generations: number;
+  reserve?: number;
 };
 export type PublicGame = Omit<Game, "deck" | "cost" | "generations"> & {
   preparing: boolean;
@@ -143,6 +179,7 @@ export function freshGame(id: string, prompt: string, world: World): Game {
     phase: "intro",
     cost: 0,
     generations: 0,
+    ...(world.pressure ? { reserve: 6 } : {}),
   };
 }
 function end(game: Game, kind: Ending["kind"], title: string, reason: string) {
@@ -174,6 +211,11 @@ export function play(game: Game, cardId: string, side: Side): Game {
   const deltas = card.reactions[side]!.map((r) => r.delta);
   const raw = g.reign.support.map((n, i) => n + deltas[i]!);
   g.reign.support = raw.map((n) => Math.max(0, Math.min(100, n)));
+  if (g.reserve !== undefined)
+    g.reserve = Math.max(
+      0,
+      Math.min(8, g.reserve - 1 + (card.reserveChanges?.[side] ?? 1)),
+    );
   g.totalTurns++;
   g.reign.turn++;
   g.version++;
@@ -193,6 +235,7 @@ export function play(game: Game, cardId: string, side: Side): Game {
     turn: g.totalTurns,
     reign: g.reign.number,
     title: card.title,
+    character: card.character,
     action: option.label,
     consequence: option.consequence,
     deltas: g.reign.support.map((value, i) => value - game.reign.support[i]!),
@@ -208,13 +251,15 @@ export function play(game: Game, cardId: string, side: Side): Game {
     end(
       g,
       "fall",
-      [
-        "Removed from office",
-        "Forced to resign",
-        "A general strike",
-        "The council withdraws its support",
-      ][fallen[0]!.i]!,
+      "Removed from office",
       `${names} withdrew their support. ${option.consequence}`,
+    );
+  } else if (g.reserve === 0 && g.world.pressure) {
+    end(
+      g,
+      "fall",
+      "The reserves are gone",
+      `${g.world.pressure.warning}. ${option.consequence}`,
     );
   } else if (!nextDraft(g)?.commitmentId) {
     g.card = g.deck.shift() ?? null;
@@ -236,6 +281,7 @@ export function succeed(game: Game, coalition: 0 | 1): Game {
     support: coalition === 0 ? [65, 40, 40, 55] : [40, 55, 65, 40],
     ended: null,
   };
+  if (g.world.pressure) g.reserve = 6;
   g.version++;
   g.card = null;
   g.deck = [];

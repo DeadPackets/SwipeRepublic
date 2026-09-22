@@ -157,12 +157,12 @@ test("legacy unfinished saves acquire durable generation on retry", async () => 
 });
 
 test("terminated paid calls keep their per-game reservation through a restart", async () => {
-  const h = harness({ ...emptySave, spent: 0.18 });
+  const h = harness({ ...emptySave, spent: 0.16 });
   await h.ready;
   const work = await h.society.acquire("owner", false);
   await h.society.allocated("owner", work!.lease.token);
   await h.society.allocated("owner", work!.lease.token);
-  expect(h.saved().spent).toBeCloseTo(0.195);
+  expect(h.saved().spent).toBeCloseTo(0.19);
   expect(h.saved().attempts).toBe(1);
   const restarted = harness({
     ...h.saved(),
@@ -176,12 +176,12 @@ test("terminated paid calls keep their per-game reservation through a restart", 
     cost: 0.003,
     error: "Recovered outcome",
   });
-  expect(restarted.saved().spent).toBeCloseTo(0.183);
+  expect(restarted.saved().spent).toBeCloseTo(0.163);
   await restarted.society.finish("owner", work!.lease.token, { cost: 0.003 });
-  expect(restarted.saved().spent).toBeCloseTo(0.183);
+  expect(restarted.saved().spent).toBeCloseTo(0.163);
 });
 
-test("partial art failures preserve finished images and retry only missing work", async () => {
+test("a background failure preserves legacy art and retries only the missing background", async () => {
   const world: World = {
     name: "Test reef",
     era: "Ninth tide",
@@ -205,7 +205,6 @@ test("partial art failures preserve finished images and retry only missing work"
     },
     art: Object.fromEntries(
       [
-        "background",
         ...Array.from({ length: 6 }, (_, i) => `portrait-${i}`),
         "resource-0",
       ].map((slot) => [slot, `/api/art/test/${slot}`]),
@@ -228,7 +227,7 @@ test("partial art failures preserve finished images and retry only missing work"
   const originalFetch = globalThis.fetch;
   globalThis.fetch = (async () => {
     calls++;
-    if (calls === 2) return new Response("unavailable", { status: 502 });
+    if (calls === 1) return new Response("unavailable", { status: 502 });
     return Response.json({
       data: [{ b64_json: "AQID", media_type: "image/webp" }],
       usage: { cost: 0.01 },
@@ -270,14 +269,14 @@ test("partial art failures preserve finished images and retry only missing work"
     );
     await h.ready;
     await h.society.alarm();
-    expect(Object.keys(h.saved().game.world.art)).toHaveLength(9);
+    expect(Object.keys(h.saved().game.world.art)).toHaveLength(7);
     expect(h.society.view("owner").error).toContain("artwork");
     expect(published).toHaveLength(0);
-    expect(calls).toBe(2);
+    expect(calls).toBe(1);
     await h.society.continueFoundation("owner");
     await h.society.alarm();
-    expect(calls).toBe(3);
-    expect(Object.keys(h.saved().game.world.art)).toHaveLength(10);
+    expect(calls).toBe(2);
+    expect(Object.keys(h.saved().game.world.art)).toHaveLength(8);
     await h.society.alarm();
     await h.society.alarm();
     expect(published).toHaveLength(1);

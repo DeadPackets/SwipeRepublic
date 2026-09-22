@@ -152,3 +152,25 @@ test("a prepared card is promoted atomically unless a promise is due", () => {
   expect(nextDraft(due)?.commitmentId).toBe(promised.commitments[0]!.id);
   expect(due.deck).toHaveLength(1);
 });
+
+test("reserve choices persist, replenish at the cap and cause a real loss at zero", () => {
+  const g = fixture();
+  g.world.pressure = { resource: "Air", warning: "Air reserves run out" };
+  g.reserve = 1;
+  g.card!.reserveChanges = [3, 0];
+  const supplied = play(g, "one", 0);
+  expect(supplied.reserve).toBe(3);
+  expect(supplied.reign.ended).toBeNull();
+  const lost = play(g, "one", 1);
+  expect(lost.reserve).toBe(0);
+  expect(lost.reign.ended?.reason).toContain("Air reserves run out");
+  expect(succeed(lost, 0).reserve).toBe(6);
+  g.reserve = 8;
+  expect(play(g, "one", 0).reserve).toBe(8);
+});
+test("legacy cards keep their existing reserve during identity enrichment", () => {
+  const g = fixture();
+  g.reserve = 6;
+  g.world.pressure = { resource: "Air", warning: "Air reserves run out" };
+  expect(play(g, "one", 1).reserve).toBe(6);
+});

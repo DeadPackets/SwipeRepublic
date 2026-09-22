@@ -11,7 +11,7 @@ import {
   type Card,
   type Draft,
 } from "../src/game";
-import { generateWorld, generateCards, scoreCards } from "./ai";
+import { generateWorld, enrichWorld, generateCards, scoreCards } from "./ai";
 import { ART_RESERVATION, artTasks, generateArt } from "./art";
 import {
   candidates,
@@ -36,7 +36,7 @@ type Bindings = {
 type Lease = {
   token: string;
   until: number;
-  kind: "world" | "cards" | "callback" | "art";
+  kind: "world" | "identity" | "cards" | "callback" | "art";
   reign: number;
   commitmentId?: string;
   draft?: Draft;
@@ -142,12 +142,16 @@ export class Society extends DurableObject<Bindings> {
         ? {
             done:
               (s.game ? 1 : 0) +
-              Object.keys(s.game?.world.art ?? {}).length +
+              (s.game
+                ? artTasks(s.game.world).filter(
+                    (t) => s.game!.world.art?.[t.slot],
+                  ).length
+                : 0) +
               (s.game?.card ? 1 : 0),
-            total: 12,
+            total: 2 + (s.game ? artTasks(s.game.world).length : 1),
             stage: !s.game
               ? "Shaping your society"
-              : Object.keys(s.game.world.art ?? {}).length < 10
+              : artTasks(s.game.world).some((t) => !s.game!.world.art?.[t.slot])
                 ? "Painting your world"
                 : "Preparing your first visitor",
           }
@@ -192,7 +196,7 @@ export class Society extends DurableObject<Bindings> {
       g?.phase === "intro" &&
       s.foundation &&
       !s.foundation.complete &&
-      Object.keys(g.world.art ?? {}).length < 10
+      artTasks(g.world).some((t) => !g.world.art?.[t.slot])
     )
       return null;
     if (g && !g.card) {
@@ -204,10 +208,15 @@ export class Society extends DurableObject<Bindings> {
         return null;
       }
     }
-    if (g?.card && (!background || g.deck.length >= 2)) return null;
-    if (g && !g.card && background) return null;
+    const enrich =
+      !!g?.card &&
+      background &&
+      g.world.identityVersion !== 2 &&
+      s.spent + 0.03 <= Number(this.env.GAME_AI_BUDGET);
+    if (!enrich && g?.card && (!background || g.deck.length >= 2)) return null;
+    if (!enrich && g && !g.card && background) return null;
     const due = g && !g.card ? nextDraft(g) : null;
-    const reserve = due?.commitmentId ? 0.002 : 0.015;
+    const reserve = !g || enrich ? 0.03 : due?.commitmentId ? 0.002 : 0.015;
     if (
       s.spent + reserve > Number(this.env.GAME_AI_BUDGET) ||
       s.attempts >= 100
@@ -217,8 +226,14 @@ export class Society extends DurableObject<Bindings> {
       );
     const lease: Lease = {
       token: crypto.randomUUID(),
-      until: Date.now() + 60000,
-      kind: !g ? "world" : due?.commitmentId ? "callback" : "cards",
+      until: Date.now() + (!g || enrich ? 120000 : 60000),
+      kind: !g
+        ? "world"
+        : enrich
+          ? "identity"
+          : due?.commitmentId
+            ? "callback"
+            : "cards",
       reserved: reserve,
       reign: g?.reign.number ?? 0,
       ...(due?.commitmentId
@@ -276,7 +291,10 @@ export class Society extends DurableObject<Bindings> {
     if (payload.error) s.error = payload.error;
     else if (payload.world && !s.game)
       s.game = freshGame(s.id, s.prompt, payload.world);
-    else if (
+    else if (payload.world && s.game && lease.kind === "identity") {
+      s.game.world = payload.world;
+      if (payload.world.pressure) s.game.reserve ??= 6;
+    } else if (
       payload.cards &&
       s.game &&
       !s.game.reign.ended &&
@@ -320,7 +338,12 @@ export class Society extends DurableObject<Bindings> {
       (s.foundation && !s.foundation.complete)
     )
       return;
-    if (s.game.card && s.game.deck.length >= 2) return;
+    if (
+      s.game.world.identityVersion === 2 &&
+      s.game.card &&
+      s.game.deck.length >= 2
+    )
+      return;
     s.queued = true;
     s.error = null;
     await this.persist();
@@ -498,7 +521,8 @@ async function prepare(
   const work = await stub.acquire(owner, background);
   if (!work) return;
   const budget = env.BUDGET.getByName(new Date().toISOString().slice(0, 10));
-  const reserved = work.lease.kind === "callback" ? 0.002 : 0.015;
+  const reserved =
+    work.lease.reserved ?? (work.lease.kind === "callback" ? 0.002 : 0.015);
   let allocated = false;
   let cost = reserved;
   try {
@@ -510,6 +534,13 @@ async function prepare(
     }
     if (work.lease.kind === "world") {
       const result = await generateWorld(env.OPENROUTER_API_KEY, work.prompt);
+      cost = result.cost;
+      await stub.finish(owner, work.lease.token, { world: result.value, cost });
+    } else if (work.lease.kind === "identity") {
+      const result = await enrichWorld(
+        env.OPENROUTER_API_KEY,
+        work.game!.world,
+      );
       cost = result.cost;
       await stub.finish(owner, work.lease.token, { world: result.value, cost });
     } else if (work.lease.kind === "callback") {

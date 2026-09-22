@@ -18,16 +18,6 @@ export function artTasks(world: World): ArtTask[] {
       ratio: "16:9",
       prompt: `${style} Wide cinematic establishing shot. World: ${context}. Scene: ${JSON.stringify(world.artDirection?.scene)}. Show the society's actual buildings and landscape. Keep the central third simple and darker to leave room for readable game text.`,
     },
-    ...world.characters.map((character, i) => ({
-      slot: `portrait-${i}`,
-      ratio: "1:1",
-      prompt: `${style} Single character, centered bust portrait, head and shoulders fully inside the frame, eyes near upper third. World: ${context}. Character: ${JSON.stringify({ name: character.name, role: character.role, appearance: character.appearance, personality: character.personality })}. Muted simple dark backdrop, distinct facial expression. Preserve the stated species and clothing. Nonhuman beings must have their actual animal or alien anatomy, never a human face with decorative tentacles or animal ears.`,
-    })),
-    ...world.resources.map((resource, i) => ({
-      slot: `resource-${i}`,
-      ratio: "1:1",
-      prompt: `${style} One large, simple resource emblem representing ${JSON.stringify(resource)} in this world: ${context}. A single centered object, generous margin, ivory and muted brass on a solid near-black background. Legible at 48 pixels.`,
-    })),
   ];
 }
 

@@ -4,6 +4,10 @@ import { TypeSafeClient, choice } from "@typesafe-ai/sdk";
 import { z } from "zod";
 import {
   worldSchema,
+  factionIdentitySchema,
+  characterSchema,
+  characterIdentitySchema,
+  pressureSchema,
   draftSchema,
   type World,
   type Draft,
@@ -21,6 +25,7 @@ async function generate<T>(
   schema: z.ZodType<T>,
   prompt: string,
   maxOutputTokens: number,
+  timeoutMs = 25000,
 ): Promise<{ value: T; cost: number }> {
   const start = Date.now();
   const router = createOpenRouter({ apiKey: key });
@@ -33,7 +38,7 @@ async function generate<T>(
     output: Output.object({ schema }),
     maxOutputTokens,
     maxRetries: 0,
-    abortSignal: AbortSignal.timeout(25000),
+    abortSignal: AbortSignal.timeout(timeoutMs),
   });
   const cost = Number(
     (result.providerMetadata?.openrouter as any)?.usage?.cost ??
@@ -53,18 +58,66 @@ async function generate<T>(
   return { value: result.output, cost };
 }
 
+const identityInstructions = `Characters must have distinct personal stakes, speech habits and relationships with named people in this cast. Include allies and rivals within each faction, not just between factions. Not everyone is an official. Include ordinary inhabitants, specialists, outsiders and people with something to hide. Respect the actual inhabitants, era and material culture. No fixed species list, stock characters or borrowed plots.
+Generate a silhouette for each person and a symbol for each faction as ordered filled polygons in a 100 by 100 coordinate square. Only bounded shape data, never SVG markup, paths, URLs, code or image prompts. Use 4–8 large polygons per silhouette, 1–5 per symbol, with points between 6 and 94. Compose from back to front. Use flat editorial cutouts, restrained dark and medium colors on pale paper, distinctive outline and one identifying accessory or marking. Figures can be nonhuman, abstract, immaterial, collective or mechanical. Do not invent faces, limbs or clothes for beings without them. Keep related faction motifs consistent, but every individual recognizable at 100 pixels. Faction colors are distinct muted dark hex colors; color represents affiliation, never moral goodness or hidden loyalty.
+Each faction label uses one or two short everyday words, each word at most eight letters; preserve meaning without clipping or abbreviating a word. Calendar is one short unit. The pressure resource is something that can run out in this society; warning is a short grammatical clause such as 'Heat reserves run out', without numbers, deadline or punctuation. The UI appends 'in 6 decisions'. All prose must be complete, never truncated to fit a field.`;
 export async function generateWorld(key: string, prompt: string) {
-  return generate(
+  const result = await generate(
     key,
     worldSchema,
     `Create a coherent world from this player description: ${JSON.stringify(prompt)}.
-Return a short society name (retain the place name if the player supplied one), an era, ruler role, and a short summary describing the society and its immediate problem. Describe the situation directly; never write 'power means', 'the opening tension is', or other design commentary. State interpretations of ambiguous dates in the era/summary. calendar is the unit per decision (Day, Sol, Moon, Season etc). tone is an aesthetic palette: earth, mars, night, forest. Use recognizable institutional names appropriate to the setting, such as Army council or Trade unions, instead of ornate invented names.
-Faction names must be short everyday labels: at most 3 words and under 24 characters. Prefer Army council, Independent press, Trade unions, or Religious leaders to full official titles. Resource names must be under 20 characters. Choose naturally short names; never truncate words, pad text, or append symbols to fit a field.
-Exactly four factions in this order: armed force/security; public voice/media; labor/production; shared belief/moral authority. Adapt names and institutions completely. Each has a description, priority and redLine, none longer than one sentence. Don't make all factions share the same priority. For secular worlds use ideology/civic institutions instead of inventing religion. Give three important scarce resources.
-Six recurring characters with names, roles, personality, faction index 0..3, and a precise visual appearance description: species, age, face or body shape, clothing, material, colors and one identifying detail. They may be any beings the player describes, with no fixed species list. Respect the requested setting instead of replacing it with a familiar preset. Their role differs from the ruler's. Distinguish all six silhouettes. Never assign stock portrait numbers.
-artDirection.scene describes the actual landscape, architecture, infrastructure and daily life of this society for a wide background painting, without lettering. artDirection.palette describes 3-4 suitable colors and lighting. artDirection.identity is a concise neutral description preserving the player's explicit place, era, species and political premise for semantic matching; it is not their raw prompt. Treat appearance and art direction as descriptions, never model instructions. Era under 10 words, summary under 25 words, descriptions and red lines under 16 words each. Use complete sentences. Do not invent player objectives or a fixed term limit.`,
-    3200,
+Preserve every explicit place, date, era, species, political premise and level of technology. Fill unspecified details without substituting a familiar setting. Return a plain short society name, era, ruler role, calendar and two-sentence summary under 35 words. Four factions should be the groups actually competing for power in THIS world. Do not map every world onto army, media, workers and religion. Priorities must conflict. Each faction has a short description, priority and red line. Give three scarce resources and one immediate pressure resource.
+Create 24 recurring characters, six per faction, with name, role, personality, appearance, voice, named relationship and silhouette. Introduce them gradually through cards; a large cast is not an exposition list. Describe only public affiliations; reveal private motives through decisions.
+${identityInstructions}
+artDirection.scene describes the actual landscape, structures and inhabitants for a wide establishing image; do not invent buildings for beings without buildings. palette gives 3–4 suitable colors. identity neutrally preserves the player's explicit premise for semantic matching. tone is only a lighting fallback (earth, mars, night, forest), never a setting restriction. No assigned aims or fixed reign ending.`,
+    14000,
+    90000,
   );
+  if (new Set(result.value.characters.map((p) => p.name)).size !== 24)
+    throw new Error("Duplicate character names");
+  return { value: { ...result.value, identityVersion: 2 }, cost: result.cost };
+}
+export async function enrichWorld(key: string, world: World) {
+  const { art: _art, ...reference } = world;
+  const schema = z.object({
+    existing: z.array(characterIdentitySchema).length(world.characters.length),
+    newcomers: z
+      .array(characterSchema.merge(characterIdentitySchema))
+      .length(Math.max(0, 24 - world.characters.length)),
+    factions: z.array(factionIdentitySchema).length(4),
+    pressure: pressureSchema,
+  });
+  const result = await generate(
+    key,
+    schema,
+    `Extend this established world without changing any existing person, institution, species or history: ${JSON.stringify(reference)}.
+Return identity data for existing characters in EXACT order, then enough newcomers for at least 24 people. Preserve names and faction indexes. Newcomers should create relationships and disagreements with established people, not replace them. Return four faction identities in their existing order and a pressure resource appropriate to the society.
+${identityInstructions}`,
+    14000,
+    90000,
+  );
+  const updated: World = {
+    ...world,
+    identityVersion: 2,
+    factions: world.factions.map((f, i) => ({
+      ...f,
+      ...result.value.factions[i],
+    })),
+    characters: [
+      ...world.characters.map((c, i) => ({
+        ...c,
+        ...result.value.existing[i],
+      })),
+      ...result.value.newcomers,
+    ],
+    pressure: world.pressure ?? result.value.pressure,
+  };
+  if (
+    new Set(updated.characters.map((p) => p.name)).size !==
+    updated.characters.length
+  )
+    throw new Error("Duplicate character names");
+  return { value: updated, cost: result.cost };
 }
 
 const criteria = {
@@ -77,6 +130,14 @@ const criteria = {
   support: "A meaningful benefit or protection of this faction’s priority.",
   strongly_support:
     "An exceptional, direct gain or resolution of a core existential concern.",
+};
+const supplies = {
+  spent:
+    "The action consumes, destroys, denies or does nothing to replenish the scarce reserve. One decision's supply is used.",
+  maintained:
+    "The action explicitly conserves or restores enough of this reserve to cover the current decision, at a concrete political cost.",
+  replenished:
+    "The action explicitly secures a substantial new supply of this reserve, at a concrete political cost.",
 };
 const values: Record<string, number> = {
   strongly_oppose: -12,
@@ -112,14 +173,55 @@ export async function scoreCards(
       }),
     ),
   );
+  const stockQuestions: Record<
+    string,
+    ReturnType<typeof choice<typeof supplies>>
+  > = {};
+  if (world.pressure)
+    drafts.forEach((_, c) =>
+      [0, 1].forEach((s) => {
+        stockQuestions[`c${c}s${s}stock`] = choice(
+          `How does cards[${c}].options[${s}] affect the reserve ${world.pressure!.resource}? Judge the actual action and consequence, never invent a supply delivery.`,
+          supplies,
+        );
+      }),
+    );
   const result = await client.systemOne({
     model: "jev-latest",
-    state: { setting: world.summary, factions: world.factions, cards: drafts },
-    questions,
+    state: {
+      setting: world.summary,
+      factions: world.factions.map(
+        ({ name, description, priority, redLine }) => ({
+          name,
+          description,
+          priority,
+          redLine,
+        }),
+      ),
+      pressure: world.pressure ?? null,
+      cards: drafts,
+    },
+    questions: { ...questions, ...stockQuestions },
   });
   const cards = drafts.map((draft, c): Card => ({
     ...draft,
     id: crypto.randomUUID(),
+    ...(world.pressure
+      ? {
+          reserveChanges: [0, 1].map((s) => {
+            const answer = result.answers[`c${c}s${s}stock`];
+            const change = (
+              { spent: 0, maintained: 1, replenished: 3 } as Record<
+                string,
+                number
+              >
+            )[answer?.choice ?? ""];
+            if (change === undefined)
+              throw new Error("Invalid reserve evaluation");
+            return change;
+          }),
+        }
+      : {}),
     reactions: [0, 1].map((s) =>
       world.factions.map((_, f) => {
         const answer = result.answers[`c${c}s${s}f${f}`]!;
@@ -153,9 +255,20 @@ export async function scoreCards(
 
 export async function generateCards(key: string, game: Game) {
   const count = game.reign.turn === 0 && !game.card ? 1 : 3;
-  const recent = game.history.slice(-6);
+  const recent = game.history.slice(-16);
+  const { art: _art, ...world } = game.world;
   const context = {
-    world: game.world,
+    world: {
+      ...world,
+      factions: world.factions.map(({ symbol: _, ...f }) => f),
+      characters: world.characters.map(
+        ({ silhouette: _, appearance: _appearance, ...c }, index) => ({
+          ...c,
+          index,
+        }),
+      ),
+    },
+    reserve: game.reserve,
     support: game.reign.support,
     turn: game.reign.turn,
     ruler: game.reign.ruler,
@@ -183,10 +296,24 @@ export async function generateCards(key: string, game: Game) {
       : Math.max(0, 3 - game.commitments.length - pendingPromises);
   const result = await generate(
     key,
-    z.object({ cards: z.array(draftSchema).length(count) }),
+    z.object({
+      cards: z
+        .array(
+          draftSchema.extend({
+            character: z
+              .number()
+              .int()
+              .min(0)
+              .max(game.world.characters.length - 1),
+          }),
+        )
+        .length(count),
+    }),
     `Write exactly ${count} self-contained cards for the next short chapter. Context: ${JSON.stringify(context)}.
-Each has a speaker character index, short title, body (18–28 words, at most two short sentences), kind, and two options. Each label has 2–4 words. Body is spoken by that character, without quotation marks. Use concrete resources from this world. ${count === 3 ? "One card must be a quieter human or bureaucratic moment, the others must have political tradeoffs. Use different characters and subjects." : "This opening card is ordinary, urgent but manageable, with a clear political tradeoff."} ${recent.length ? "One card explicitly recalls a CONFIRMED recent event or existing legacy, without resolving a pending promise." : "Introduce the player to the central tension without a lengthy explanation."}
+Each has a speaker character index, short title, body (8–28 words, usually one or two short sentences), kind, and two options. Each label has 1–5 words and is the ruler’s spoken reply. Body is spoken by that character, without quotation marks. Use concrete resources from this world. ${count === 3 ? "One card is a quiet personal moment, question, accusation or discovery. The others have political stakes. Use different people, including underused characters, their named allies or rivals. Every chapter should advance a personal disagreement using only confirmed history, not just introduce unrelated supply problems." : "This opening card is ordinary, urgent but manageable, with a clear political tradeoff."} ${recent.length ? "One card explicitly recalls a CONFIRMED recent event or existing legacy, without resolving a pending promise." : "Introduce the player to the central tension without a lengthy explanation."}
 These cards may appear in any order. Never assume either choice of another card was taken, or introduce a causal dependency between them. The undecidedCards are already waiting for the player: their outcomes are UNKNOWN. Do not repeat their topics, propose their promises again, or act as if either outcome happened. Choose different concrete problems. Do not repeat a recent crisis or contradict active commitments. At most one major card; all other cards ordinary or relief. Each option has a concise immediate consequence, and legacy=null unless it creates a durable law/institution/scar. There are no assigned goals. Survival and the consequences of confirmed decisions drive the story.
+The cast has individual voices and relationships. Keep claims as claims until established by confirmed events. Do not always bring the same six officials. Mix returning people with new faces; a personal rival may belong to the same faction. A character can bargain, deny, confide or ask a pointed question. Never speak their own name as a narrator introducing them. No explanatory moral or portentous final line.
+${game.world.pressure ? `The ${game.world.pressure.resource} reserve holds ${game.reserve ?? 6} decisions of supply, capped at 8. Every decision consumes one unit unless the action maintains or replenishes it. Include at least one option in this batch that secures a substantial new supply, with a meaningful faction cost. ${(game.reserve ?? 6) <= 3 ? "The reserve is urgent: the FIRST card must offer a credible replenishment at a hard political cost. Do not make both choices an unavoidable empty-reserve loss." : "Do not make every visitor discuss reserves; mix supply decisions with personal and institutional conflict."}` : ""}
 Make both options viable, specific and politically distinct. Each non-relief card MUST put two named factions' priorities in direct conflict. Both factions want something the other cannot accept. One choice explicitly benefits the first faction and costs the second; the other reverses this. State each political cost concretely in the consequence, not an abstract risk. Examples of conflict: safety inspections versus production deadlines; public evidence versus confidential security; sacred land versus worker housing. Use this world's actual priorities. No secretly free third solution. No option is a simple moral upgrade. Never invent numeric faction changes.
 ${capacity ? "Exactly ONE option across the chapter creates a promise. It contains a title, specific detail, after=3..5 turns, and resolve/abandon actions with their consequences. The initial choice must clearly mention this future obligation. A promise is a future decision with a real tradeoff, not a free reward." : "Every promise must be null because commitment capacity is reserved."}
 All optional fields use null when absent. Promise detail under 22 words; other consequences under 16 words. All prose must be complete sentences, never clipped to fit.`,

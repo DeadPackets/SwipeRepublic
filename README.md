@@ -1,6 +1,6 @@
 # Swipe Republic
 
-A browser game about governing a society you describe. Luna writes the world and its dilemmas; Jev judges how four factions react and finds similar societies; Muse paints their people and places. Your decisions, laws, and promises carry into the next reign.
+A browser game about governing a society you describe. Luna writes the world and its dilemmas; Jev judges how four factions react and finds similar societies; Muse paints their world. Your decisions, laws, and promises carry into the next reign.
 
 Production: https://swiperepublic.deadpackets.pw
 
@@ -30,8 +30,8 @@ Wrangler must be authenticated to the Cloudflare account containing `deadpackets
 ## Game rules
 
 - Four setting-specific factions start with 50 support. Zero support ends a reign; high support is safe.
-- Each action has stored reactions, so reloading cannot reroll a decision. Hover, keyboard focus, or arrow keys preview reaction direction. Tap a choice or swipe to commit; Enter commits an arrow-key preview. A question mark indicates an uncertain judgment, which has a smaller maximum effect.
-- Reigns continue until a faction reaches zero. There are no aims, retirement requirements or fixed turn limits.
+- Each action has stored reactions, so reloading cannot reroll a decision. Hover, keyboard focus, or arrow keys preview reaction direction. Tap a choice, swipe, or hold a left/right arrow for 700 ms to commit. Releasing early cancels. Every input plays the same full card swipe. A question mark indicates an uncertain judgment, which has a smaller maximum effect.
+- Reigns continue until a faction or essential reserve reaches zero. Reserves drain by one each decision; Jev scores whether a choice spends, maintains or replenishes them. There are no aims, retirement requirements or fixed turn limits.
 - Promises return after three to five decisions. Up to three laws or lasting effects, unfinished promises, and the cast survive succession. Succession has no fixed reign count; the AI allowance still applies.
 - Saves are stored on the server and tied to an HttpOnly browser cookie. Local browser storage lists your societies. Initial session creation uses Web Locks to coordinate tabs and requires a current browser on HTTPS (or localhost). The guest cookie lasts 30 days. Clearing or losing the cookie loses access; download the chronicle to keep the story. There are no accounts or cross-device recovery in v1.
 
@@ -39,7 +39,7 @@ Wrangler must be authenticated to the Cloudflare account containing `deadpackets
 
 Luna uses `~openai/gpt-luna-latest` through `ai` and `@openrouter/ai-sdk-provider`. Jev uses `jev-latest` through `@typesafe-ai/sdk` at `https://openrouter.ai/api`; OpenRouter maps it to `~typesafe/jev-latest` on the System One endpoint.
 
-The opening card is generated before taking office and saved with the reusable template. Later cards are generated and scored in groups of three; the next group starts when fewer than two spare cards remain. Cards within a batch do not assume another card's choice. Recorded promises interrupt the deck when due. Narrative requests include plain-language editing rules adapted from Humanizer; there is no extra rewrite call. New dilemmas target 18–28 words and choice labels 2–4 words. Older saved cards keep their original text. A measured three-card sample after simplification contained 23, 22 and 23 words and cost $0.001586 including Jev.
+The opening card is generated before taking office and saved with the reusable template. Later cards are generated and scored in groups of three; the next group starts when fewer than two spare cards remain. Cards within a batch do not assume another card's choice. Recorded promises interrupt the deck when due. Narrative requests include plain-language editing rules adapted from Humanizer; there is no extra rewrite call. New dilemmas target 8–28 spoken words and choice labels 1–5 words. Older saved cards keep their original text. A measured three-card sample after simplification contained 23, 22 and 23 words and cost $0.001586 including Jev.
 
 The initial three-card experiments cost $0.00183–$0.00191 per batch, including Jev, before the final prose prompt. They took about 12 seconds. These are measured samples, not a guarantee of latency or cost. Generation logs include model, elapsed time, and cost; game saves also accumulate costs. No player prompt or API key is deliberately logged.
 
@@ -60,7 +60,7 @@ Global and per-game spend are reserved before provider calls. Failed or interrup
 
 The player can describe any setting or inhabitants. The application retrieves D1 campaign candidates and asks Jev to score semantic similarity on a 0–100 rubric; this is separate from model confidence. Only scores strictly above 85 are offered, and reuse is optional. Catalogs of up to 64 entries are checked in full. Larger catalogs combine full-text candidates with recent templates before Jev scoring; this bounds cost but can miss a distant paraphrase. Missing a match never blocks original generation.
 
-Luna generates the world name, people, institutions, resources and art descriptions. Muse uses OpenRouter's dedicated `/api/v1/images` endpoint and `meta/muse-image`. A test request returned WebP in 21.2 seconds at $0.01. Ten images per new society therefore cost $0.10 at that measured rate, plus world/card generation. Five image requests run concurrently. Individual completed assets survive retries. Only finished templates enter the shared catalog; private decisions, prompts and session credentials do not.
+Luna generates the world name, people, institutions, resources and art descriptions. Muse uses OpenRouter's dedicated `/api/v1/images` endpoint and `meta/muse-image`. A test request returned WebP in 21.2 seconds at $0.01. New templates need one background image. Luna supplies 24 characters, relationships, faction palettes, icons and silhouettes as validated polygons rendered locally as SVG; portraits and icons incur no image calls. Individual completed assets survive retries. Only finished templates enter the shared catalog; private decisions, prompts and session credentials do not.
 
 Cloning copies the starting world and prepared cards, gives cards new IDs, and resets support, history and commitments. It reuses immutable image URLs without calling Muse or Luna for the initial world. Later crises remain specific to each reign's decisions.
 
@@ -69,11 +69,11 @@ Cloudflare's $5 paid plan is the hosting baseline; OpenRouter charges separately
 ## Check changes
 
 ```sh
-bun test
+bun test src worker
 bun run build
 ```
 
-Fifteen tests cover survival, succession, atomic card promotion, commitments, private template cloning, matching boundaries, local-save retention, generation reservations, legacy recovery and partial image failures. The campaign smoke test uses real model calls and stores its private test session under ignored `artifacts/`. It checks generation, artwork, matching, ownership, independent reuse and repeated decisions.
+Twenty tests cover hold controls, reserve survival, and survival, succession, atomic card promotion, commitments, private template cloning, matching boundaries, local-save retention, generation reservations, legacy recovery and partial image failures. The campaign smoke test uses real model calls and stores its private test session under ignored `artifacts/`. It checks generation, artwork, matching, ownership, independent reuse and repeated decisions.
 
 ```sh
 bun scripts/campaign-smoke.ts http://127.0.0.1:5173

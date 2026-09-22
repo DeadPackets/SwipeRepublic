@@ -67,8 +67,11 @@ while (!state.value.game || state.value.creation) {
   assert.equal(state.status, 200, state.value.error);
 }
 const world = state.value.game as PublicGame;
-assert.equal(Object.keys(world.world.art ?? {}).length, 10);
+assert.equal(Object.keys(world.world.art ?? {}).length, 1);
 assert.ok(world.card);
+assert.equal(world.world.characters.length, 24);
+assert.ok(world.world.characters.every((c) => c.silhouette?.length));
+assert.ok(world.world.factions.every((f) => f.symbol?.length && f.label));
 const art = await fetch(`${base}${world.world.art!.background}`);
 assert.equal(art.status, 200);
 assert.match(art.headers.get("content-type")!, /^image\/(webp|png|jpeg)$/);
@@ -136,7 +139,8 @@ console.log(
     passed: true,
     society: world.world.name,
     seconds: Math.round((Date.now() - started) / 1000),
-    images: 10,
+    images: 1,
+    cast: world.world.characters.length,
     backgroundBytes: bytes,
     similarity: match.similarity,
     checks: [

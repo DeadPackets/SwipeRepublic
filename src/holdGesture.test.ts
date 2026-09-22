@@ -1,0 +1,41 @@
+import { test, expect } from "bun:test";
+import { HoldGesture } from "./holdGesture";
+test("holds require 700ms and cannot repeat into a new card", () => {
+  const h = new HoldGesture();
+  h.down(0, false, 0, true);
+  expect(h.finish(699)).toBeNull();
+  expect(h.finish(700)).toBe(0);
+  h.down(0, true, 1000, true);
+  expect(h.finish(2000)).toBeNull();
+  h.down(0, false, 2100, true);
+  expect(h.finish(3000)).toBeNull();
+  h.up(0);
+  h.down(1, false, 3100, true);
+  expect(h.finish(3800)).toBe(1);
+});
+test("early release, opposing arrows and focus cancellation never choose", () => {
+  const h = new HoldGesture();
+  h.down(1, false, 0, true);
+  h.up(1);
+  expect(h.finish(1000)).toBeNull();
+  h.down(0, false, 1100, true);
+  h.down(1, false, 1300, true);
+  expect(h.finish(3000)).toBeNull();
+  h.up(0);
+  expect(h.finish(4000)).toBeNull();
+  h.up(1);
+  h.down(0, false, 4100, true);
+  h.cancel(true);
+  expect(h.finish(5000)).toBeNull();
+  h.down(0, false, 5100, true);
+  expect(h.finish(5800)).toBe(0);
+});
+test("an arrow first pressed while busy must be released before choosing", () => {
+  const h = new HoldGesture();
+  h.down(0, false, 0, false);
+  h.down(0, true, 500, true);
+  expect(h.finish(2000)).toBeNull();
+  h.up(0);
+  h.down(0, false, 2100, true);
+  expect(h.finish(2800)).toBe(0);
+});

@@ -75,14 +75,9 @@ test("campaign reuse creates independent private reigns and unique cards while s
   expect(second.world.art!.background).toBe(world.art!.background);
   expect(template.cards[0]!.id).toBe("shared-card");
 });
-test("art jobs cover the actual society, six unrestricted characters and three resources", () => {
+test("only the world background uses an image call", () => {
   const tasks = artTasks(world);
-  expect(tasks).toHaveLength(10);
-  expect(new Set(tasks.map((task) => task.slot)).size).toBe(10);
-  expect(tasks.find((task) => task.slot === "portrait-0")!.prompt).toContain(
-    "octopus",
-  );
-  expect(tasks.find((task) => task.slot === "resource-2")!.prompt).toContain(
-    "Algae",
-  );
+  expect(tasks.map((t) => t.slot)).toEqual(["background"]);
+  expect(tasks[0]!.prompt).toContain(world.summary);
+  expect(tasks[0]!.prompt).toContain(world.artDirection!.scene);
 });

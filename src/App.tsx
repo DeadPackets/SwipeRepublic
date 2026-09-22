@@ -2,8 +2,11 @@ import { useEffect, useRef, useState } from "react";
 import type { Card, PublicGame, Side } from "./game";
 import { WorldArrival, type CreationProgress } from "./WorldArrival";
 import type { CampaignMatch } from "../worker/campaigns";
-import { DecisionCard } from "./DecisionCard";
-import { AnimatedNumber } from "./AnimatedNumber";
+import { DecisionCard, SWIPE_MS } from "./DecisionCard";
+import { FactionIcon } from "./WorldGraphic";
+import { Portrait } from "./Portrait";
+import { useArrowHold } from "./useArrowHold";
+import { GenerationCountdown } from "./WorldArrival";
 import {
   readSocieties,
   rememberSociety,
@@ -55,25 +58,6 @@ async function api<T = Envelope>(
           : "The republic lost its connection. Your last saved decision is safe."),
     );
   return data;
-}
-const factionPaths = [
-  "M12 2 20 6v6c0 5-8 10-8 10S4 17 4 12V6ZM12 6v11M8 10h8",
-  "M4 5h13v15H4ZM17 9h3v11H7M7 9h7M7 12h7M7 15h4",
-  "M5 21V10l6 3V8l8 4v9ZM8 3v5M12 3v3M8 16v2M12 16v2M16 16v2",
-  "M12 3c1 6 6 6 6 12a6 6 0 0 1-12 0c0-4 3-5 3-8 1 2 2 3 3 4 1-3 1-5 0-8Z",
-];
-function Icon({ index }: { index: number }) {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.4"
-      aria-hidden="true"
-    >
-      <path d={factionPaths[index]} />
-    </svg>
-  );
 }
 function download(game: PublicGame) {
   const text = [
@@ -149,6 +133,8 @@ export default function App() {
   const departureTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [dialogClosing, setDialogClosing] = useState(false);
   const dialogTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const playSurface = useRef<HTMLElement>(null);
+  const departureToken = useRef(0);
   const gameRef = useRef(game);
   gameRef.current = game;
 
@@ -444,20 +430,48 @@ export default function App() {
   }, [game, busy, working, error]);
 
   function choose(side: Side) {
+    const current = gameRef.current;
     if (
-      !game?.card ||
-      game.phase !== "playing" ||
+      !current?.card ||
+      current.phase !== "playing" ||
       working ||
       lock.current ||
       departure
     )
       return;
-    setDeparture({ card: game.card, side });
-    departureTimer.current = setTimeout(
-      () => setDeparture(null),
-      reducedMotion ? 0 : 360,
-    );
-    void mutate("choose", { cardId: game.card.id, side });
+    const token = ++departureToken.current,
+      target = current.id;
+    setDeparture({ card: current.card, side });
+    const animation = new Promise<void>((resolve) => {
+      departureTimer.current = setTimeout(
+        resolve,
+        reducedMotion ? 120 : SWIPE_MS,
+      );
+    });
+    void Promise.all([
+      animation,
+      mutate("choose", { cardId: current.card.id, side }),
+    ]).then(() => {
+      if (active.current === target && departureToken.current === token)
+        setDeparture(null);
+    });
+  }
+  const hold = useArrowHold({
+    enabled:
+      !!game?.card &&
+      game.phase === "playing" &&
+      !game.reign.ended &&
+      !working &&
+      !departure &&
+      !dialog &&
+      !error,
+    cardId: game?.card?.id,
+    surface: playSurface,
+    onSelect: setSelected,
+    onChoose: choose,
+  });
+  function preview(side: Side | null) {
+    if (!hold.holding() && !departure) setSelected(side);
   }
   function closeDialog() {
     setDialogClosing(true);
@@ -476,40 +490,13 @@ export default function App() {
     [],
   );
   useEffect(() => {
-    const listener = (event: KeyboardEvent) => {
-      if (
-        dialog ||
-        !game?.card ||
-        game.phase !== "playing" ||
-        working ||
-        event.ctrlKey ||
-        event.metaKey ||
-        event.altKey ||
-        (event.target instanceof HTMLElement &&
-          event.target.closest(
-            "input,textarea,select,button,[contenteditable]",
-          ))
-      )
-        return;
-      if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
-        event.preventDefault();
-        setSelected(event.key === "ArrowLeft" ? 0 : 1);
-      }
-      if (event.key === "Escape") setSelected(null);
-      if (event.key === "Enter" && selected !== null) {
-        event.preventDefault();
-        choose(selected);
-      }
-    };
-    window.addEventListener("keydown", listener);
-    return () => window.removeEventListener("keydown", listener);
-  }, [dialog, game, working, selected]);
-  useEffect(() => {
     const element = dialogRef.current;
     if (dialog && element && !element.open) element.showModal();
   }, [dialog]);
 
   const newSociety = () => {
+    departureToken.current++;
+    hold.cancel(true);
     switchId(null);
     setGame(null);
     setBusy(false);
@@ -526,9 +513,15 @@ export default function App() {
   const card = departure?.card ?? game?.card;
   const character = game && card ? game.world.characters[card.character] : null;
   const reactions = card && selected !== null ? card.reactions[selected] : null;
-  const doomed = reactions?.some(
+  const supportDoomed = reactions?.some(
     (r, i) => r.delta < 0 && game!.reign.support[i] + r.delta <= 0,
   );
+  const reserveDoomed =
+    game?.reserve !== undefined &&
+    card &&
+    selected !== null &&
+    game.reserve - 1 + (card.reserveChanges?.[selected] ?? 1) <= 0;
+  const doomed = supportDoomed || reserveDoomed;
   const loading = working || busy;
   const pressure = game ? Math.min(...game.reign.support) : 50;
   const commitments = game && (
@@ -563,9 +556,10 @@ export default function App() {
       data-phase={game?.phase ?? "welcome"}
       data-motion={reducedMotion ? "reduced" : "full"}
     >
-      {game?.nextPortrait && (
-        <link rel="preload" as="image" href={game.nextPortrait} />
-      )}
+      {game?.nextPortrait &&
+        !game.world.characters[game.card?.character ?? 0]?.silhouette && (
+          <link rel="preload" as="image" href={game.nextPortrait} />
+        )}
       {game?.world.art?.background && (
         <div
           className="world-scene"
@@ -717,9 +711,10 @@ export default function App() {
           <h1>{loading ? "Opening your world…" : "Your game is saved."}</h1>
           <p>
             {loading
-              ? "Your society comes first. Its people and artwork follow."
+              ? "Preparing your society, its people and its first decision."
               : "Try again to continue."}
           </p>
+          {loading && <GenerationCountdown />}
         </main>
       )}
 
@@ -733,9 +728,13 @@ export default function App() {
         />
       )}
 
-      {game?.phase === "playing" && !game.reign.ended && (
+      {game?.phase === "playing" && (!game.reign.ended || departure) && (
         <main className="game-layout">
-          <section className="play-column" aria-label="Current decision">
+          <section
+            ref={playSurface}
+            className="play-column"
+            aria-label="Current decision"
+          >
             <p className="reign-line">
               {game.world.name}
               <span>
@@ -747,7 +746,6 @@ export default function App() {
               {game.world.factions.map((f, i) => {
                 const reaction = reactions?.[i];
                 const value = game.reign.support[i];
-                const delta = last?.deltas[i] ?? 0;
                 return (
                   <button
                     key={f.name}
@@ -756,35 +754,11 @@ export default function App() {
                     title={`${f.name}: ${value}/100`}
                     aria-label={`${f.name}: ${value} support${reaction ? `, ${reaction.uncertain ? "uncertain " : ""}${reaction.delta > 0 ? "increase" : reaction.delta < 0 ? "decrease" : "unchanged"}` : ""}`}
                   >
-                    <Icon index={i} />
-                    <span className="support-number">
-                      <AnimatedNumber
-                        value={value}
-                        reducedMotion={reducedMotion}
-                      />
-                      {reaction ? (
-                        <span
-                          className={`reaction ${reaction.delta < 0 ? "negative" : ""}`}
-                        >
-                          {reaction.delta > 0
-                            ? "↑"
-                            : reaction.delta < 0
-                              ? "↓"
-                              : "·"}
-                          {reaction.uncertain ? "?" : ""}
-                        </span>
-                      ) : (
-                        delta !== 0 && (
-                          <span
-                            key={last?.turn}
-                            className={`faction-change ${delta < 0 ? "negative" : ""}`}
-                            aria-hidden="true"
-                          >
-                            {delta > 0 ? "+" : ""}
-                            {delta}
-                          </span>
-                        )
-                      )}
+                    <FactionIcon faction={f} />
+                    <span className="faction-label">{f.label ?? f.name}</span>
+                    <span className="reaction" aria-hidden="true">
+                      {reaction?.delta ? (reaction.delta > 0 ? "↑" : "↓") : ""}
+                      {reaction?.uncertain ? "?" : ""}
                     </span>
                     <span className="meter">
                       <i style={{ transform: `scaleX(${value / 100})` }} />
@@ -798,6 +772,16 @@ export default function App() {
                 ? `${last.consequence} ${game.world.factions.map((f, i) => `${f.name}: ${game.reign.support[i]}`).join(". ")}`
                 : "Keep all four factions above zero."}
             </div>
+            {game.world.pressure && game.reserve !== undefined && (
+              <p
+                className={`reserve-warning ${game.reserve <= 2 ? "critical" : ""}`}
+              >
+                {game.world.pressure.warning} in{" "}
+                <strong>
+                  {game.reserve} {game.reserve === 1 ? "decision" : "decisions"}
+                </strong>
+              </p>
+            )}
             {card ? (
               <>
                 <div className="decision-stage">
@@ -808,13 +792,20 @@ export default function App() {
                         key={game.card.id}
                         card={game.card}
                         character={game.world.characters[game.card.character]!}
-                        tone={game.world.tone}
+                        faction={
+                          game.world.factions[
+                            game.world.characters[game.card.character]!.faction
+                          ]!
+                        }
+                        calendar={game.world.calendar}
+                        turn={game.reign.turn + 1}
                         image={
                           game.world.art?.[`portrait-${game.card.character}`]
                         }
                         selected={null}
                         working={true}
                         leaving={null}
+                        reducedMotion={reducedMotion}
                         onSelect={() => {}}
                         onChoose={() => {}}
                       />
@@ -823,24 +814,45 @@ export default function App() {
                     key={card.id}
                     card={card}
                     character={character!}
-                    tone={game.world.tone}
+                    faction={game.world.factions[character!.faction]!}
+                    calendar={game.world.calendar}
+                    turn={
+                      departure
+                        ? game.reign.turn + (game.card?.id === card.id ? 1 : 0)
+                        : game.reign.turn + 1
+                    }
                     image={game.world.art?.[`portrait-${card.character}`]}
                     selected={selected}
-                    working={working}
+                    working={working || !!departure}
                     leaving={departure?.side ?? null}
-                    onSelect={setSelected}
+                    reducedMotion={reducedMotion}
+                    onSelect={preview}
                     onChoose={choose}
                   />
+                  {departure &&
+                    working &&
+                    game.card?.id === departure.card.id && (
+                      <p className="saving-decision" role="status">
+                        Saving your decision…
+                      </p>
+                    )}
                 </div>
                 <div className="decision-hint" aria-live="polite">
                   {doomed ? (
                     <span className="danger-warning">
                       This could end your reign.
                     </span>
-                  ) : game.reign.turn === 0 ? (
-                    <span>Swipe or choose. Keep every faction above zero.</span>
+                  ) : selected !== null && card ? (
+                    <span>{card.options[selected]?.consequence}</span>
+                  ) : last ? (
+                    <span>{last.consequence}</span>
                   ) : null}
                 </div>
+                <p className="controls-hint" id="decision-controls">
+                  Swipe, click, or hold ← / → to answer.
+                  <br />
+                  Release a key early to cancel.
+                </p>
               </>
             ) : (
               <div className="card-wait" aria-live="polite">
@@ -866,7 +878,7 @@ export default function App() {
         </main>
       )}
 
-      {game?.reign.ended && (
+      {game?.reign.ended && !departure && (
         <main
           className={`ending ending-${game.reign.ended.kind}`}
           key={`${game.id}-ending-${game.reign.number}`}
@@ -886,7 +898,9 @@ export default function App() {
                     disabled={working}
                     onClick={() => void mutate("succeed", { coalition: c })}
                   >
-                    <Icon index={c === 0 ? 0 : 2} />
+                    <FactionIcon
+                      faction={game.world.factions[c === 0 ? 0 : 2]!}
+                    />
                     <span>{game.world.factions[c === 0 ? 0 : 2].name}</span>
                     <span aria-hidden="true">→</span>
                   </button>
@@ -988,16 +1002,18 @@ export default function App() {
                 <details>
                   <summary>Keyboard and game rules</summary>
                   <p>
-                    Use ← or → to preview, then Enter to choose. Tab and Enter
-                    also work.
+                    Hold ← or → for 0.7 seconds to choose. Release early to
+                    cancel. Release the key before making another decision.
                   </p>
                   <p>
-                    Your reign lasts until a faction reaches zero. A successor
-                    inherits your laws and unfinished promises.
+                    Your reign lasts until a faction reaches zero or the reserve
+                    runs out. A successor inherits your laws and unfinished
+                    promises.
                   </p>
                   <p>
-                    Arrows preview a change. A question mark means the judgment
-                    is uncertain. Major crises have larger effects.
+                    The arrows above a faction show its reaction. A question
+                    mark means the judgment is uncertain. Major crises have
+                    larger effects.
                   </p>
                 </details>
                 <p className="quiet">
@@ -1012,7 +1028,7 @@ export default function App() {
                   {game.world.factions.map((f, i) => (
                     <details key={f.name} open={factionDetail === i}>
                       <summary>
-                        <Icon index={i} />
+                        <FactionIcon faction={f} />
                         {f.name}
                         <span>{game.reign.support[i]}</span>
                       </summary>
@@ -1021,6 +1037,29 @@ export default function App() {
                     </details>
                   ))}
                 </div>
+                <details>
+                  <summary>
+                    Your people ({game.world.characters.length})
+                  </summary>
+                  <div className="people-list">
+                    {game.world.characters.map((person, i) => (
+                      <article key={i}>
+                        <Portrait
+                          character={person}
+                          image={game.world.art?.[`portrait-${i}`]}
+                        />
+                        <div>
+                          <h3>{person.name}</h3>
+                          <p>
+                            {person.role} ·{" "}
+                            {game.world.factions[person.faction]?.name}
+                          </p>
+                          <p>{person.relationship ?? person.personality}</p>
+                        </div>
+                      </article>
+                    ))}
+                  </div>
+                </details>
                 <details>
                   <summary>Promises ({game.commitments.length})</summary>
                   {commitments}

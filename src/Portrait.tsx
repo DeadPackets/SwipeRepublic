@@ -1,53 +1,29 @@
 import { memo } from "react";
 import type { World } from "./game";
-
-const appearances: Record<string, number> = {
-  fox: 6,
-  bird: 7,
-  deer: 8,
-  bear: 9,
-  beaver: 10,
-  robot: 11,
-  alien: 12,
-};
+import { WorldGraphic } from "./WorldGraphic";
 
 export const Portrait = memo(function Portrait({
-  character = 0,
-  tone = "earth",
-  appearance = "human",
-  portrait,
+  character,
   image,
 }: {
+  character: World["characters"][number];
   image?: string;
-  character?: number;
-  portrait?: number | null;
-  tone?: World["tone"];
-  appearance?: World["characters"][number]["appearance"];
 }) {
-  const tile =
-    appearance === "human"
-      ? (portrait ?? character) % 6
-      : (appearances[appearance] ?? character % 6);
-  if (image)
-    return (
-      <div className="portrait" aria-hidden="true">
-        <img
-          className="generated-portrait"
-          src={image}
-          alt=""
-          draggable={false}
-          decoding="async"
-        />
-      </div>
-    );
   return (
-    <div className={`portrait portrait-${tone}`} aria-hidden="true">
-      <div
-        className="portrait-art"
-        style={{
-          backgroundPosition: `${((tile % 4) * 100) / 3}% ${(Math.floor(tile / 4) * 100) / 3}%`,
-        }}
-      />
+    <div className="character-silhouette" aria-hidden="true">
+      {character.silhouette ? (
+        <WorldGraphic graphic={character.silhouette} />
+      ) : image ? (
+        <img src={image} alt="" draggable={false} decoding="async" />
+      ) : (
+        <span className="character-seal">
+          {character.name
+            .split(/\s+/)
+            .map((word) => word[0])
+            .slice(0, 2)
+            .join("")}
+        </span>
+      )}
     </div>
   );
 });
