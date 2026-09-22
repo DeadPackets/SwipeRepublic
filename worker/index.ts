@@ -26,7 +26,7 @@ import {
 type Bindings = {
   CAMPAIGNS: D1Database;
   ART: R2Bucket;
-  SOCIETIES: DurableObjectNamespace<Society>;
+  SOCIETIES: DurableObjectNamespace<SocietyV2>;
   BUDGET: DurableObjectNamespace<Budget>;
   REQUEST_LIMIT: RateLimit;
   OPENROUTER_API_KEY: string;
@@ -70,7 +70,7 @@ const successorSchema = mutationSchema.extend({
   coalition: z.union([z.literal(0), z.literal(1)]),
 });
 
-export class Society extends DurableObject<Bindings> {
+export class SocietyV2 extends DurableObject<Bindings> {
   private save: Save | null = null;
   constructor(ctx: DurableObjectState, env: Bindings) {
     super(ctx, env);
@@ -514,7 +514,7 @@ export class Budget extends DurableObject<Bindings> {
 
 async function prepare(
   env: Bindings,
-  stub: Pick<Society, "acquire" | "allocated" | "finish">,
+  stub: Pick<SocietyV2, "acquire" | "allocated" | "finish">,
   owner: string,
   background = false,
 ) {
@@ -604,7 +604,7 @@ export default {
       );
       if (asset && request.method === "GET") {
         const cacheKey = new Request(`${url.origin}${url.pathname}`);
-        const cache = await caches.open("world-art");
+        const cache = await caches.open("world-art-v2");
         const cached = await cache.match(cacheKey);
         if (cached) return cached;
         const object = await env.ART.get(`${asset[1]}/${asset[2]}`);

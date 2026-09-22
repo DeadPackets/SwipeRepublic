@@ -8,7 +8,7 @@ mock.module("cloudflare:workers", () => ({
     ) {}
   },
 }));
-const { Society } = await import("./index");
+const { SocietyV2: Society } = await import("./index");
 
 test("a cheap callback fits the remaining allowance and completion is charged once", async () => {
   const world: World = {

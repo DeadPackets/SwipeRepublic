@@ -8,13 +8,13 @@ interface __BaseEnv_Env {
 	DAILY_AI_BUDGET: "1.00";
 	GAME_AI_BUDGET: "0.20";
 	OPENROUTER_API_KEY: string;
-	SOCIETIES: DurableObjectNamespace<import("./worker/index").Society>;
+	SOCIETIES: DurableObjectNamespace<import("./worker/index").SocietyV2>;
 	BUDGET: DurableObjectNamespace<import("./worker/index").Budget>;
 }
 declare namespace Cloudflare {
 	interface GlobalProps {
 		mainModule: typeof import("./worker/index");
-		durableNamespaces: "Society" | "Budget";
+		durableNamespaces: "SocietyV2" | "Budget";
 	}
 	interface Env extends __BaseEnv_Env {}
 }

@@ -46,3 +46,30 @@ export function readSocieties(): SavedSociety[] {
 export function rememberSociety(save: SavedSociety) {
   return writeStored(`${SOCIETY_PREFIX}${save.id}`, save);
 }
+
+export function clearPreResetSaves(hostname: string) {
+  if (
+    ![
+      "swiperepublic.deadpackets.pw",
+      "swipe-republic.b00073615.workers.dev",
+    ].includes(hostname)
+  )
+    return;
+  const marker = "swipe-republic:reset:2026-09-22";
+  try {
+    if (localStorage.getItem(marker)) return;
+    for (let i = localStorage.length - 1; i >= 0; i--) {
+      const key = localStorage.key(i);
+      if (
+        key &&
+        (key === "swipe-republic:active" ||
+          key === LEGACY_KEY ||
+          key.startsWith(SOCIETY_PREFIX))
+      )
+        localStorage.removeItem(key);
+    }
+    localStorage.setItem(marker, "done");
+  } catch {
+    // Storage can be unavailable in private browsing.
+  }
+}

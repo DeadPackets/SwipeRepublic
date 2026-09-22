@@ -24,11 +24,18 @@
   "r2_buckets": [{ "binding": "ART", "bucket_name": "swipe-republic-art" }],
   "durable_objects": {
     "bindings": [
-      { "name": "SOCIETIES", "class_name": "Society" },
+      { "name": "SOCIETIES", "class_name": "SocietyV2" },
       { "name": "BUDGET", "class_name": "Budget" },
     ],
   },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Society", "Budget"] }],
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["Society", "Budget"] },
+    {
+      "tag": "v2-reset-2026-09-22",
+      "new_sqlite_classes": ["SocietyV2"],
+    },
+    { "tag": "v3-delete-old-societies", "deleted_classes": ["Society"] },
+  ],
   "vars": { "DAILY_AI_BUDGET": "1.00", "GAME_AI_BUDGET": "0.20" },
   "ratelimits": [
     {
