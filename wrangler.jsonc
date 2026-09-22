@@ -24,7 +24,7 @@
   "r2_buckets": [{ "binding": "ART", "bucket_name": "swipe-republic-art" }],
   "durable_objects": {
     "bindings": [
-      { "name": "SOCIETIES", "class_name": "SocietyV2" },
+      { "name": "SOCIETIES", "class_name": "SocietyV3" },
       { "name": "BUDGET", "class_name": "Budget" },
     ],
   },
@@ -35,6 +35,8 @@
       "new_sqlite_classes": ["SocietyV2"],
     },
     { "tag": "v3-delete-old-societies", "deleted_classes": ["Society"] },
+    { "tag": "v4-purge-2-create", "new_sqlite_classes": ["SocietyV3"] },
+    { "tag": "v5-purge-2-delete", "deleted_classes": ["SocietyV2"] },
   ],
   "vars": { "DAILY_AI_BUDGET": "1.00", "GAME_AI_BUDGET": "0.20" },
   "ratelimits": [

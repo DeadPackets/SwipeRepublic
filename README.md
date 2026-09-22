@@ -45,7 +45,7 @@ Read one short request, check who stands to gain, and choose a side. There's no 
 
 Keep every faction above zero support and keep your essential reserve from running dry. A supply delivery can buy time. It can also put the person who controls the delivery in a very good bargaining position.
 
-Promises return after three to five decisions. Your laws and unfinished business can survive your removal from office, along with the people who remember what you did. Choose a successor and keep going.
+Promises return after three to five decisions. Your laws and unfinished business shape later choices. If a faction withdraws its support or your reserves run out, the run ends permanently. You can also choose **Menu → Abandon run** to end it early. Your chronicle stays in Saved games.
 
 <details>
 <summary>Before you blame the controls</summary>
@@ -194,7 +194,7 @@ bun test src worker
 bun run build
 ```
 
-Tests cover held-key controls, reserve depletion, succession, promise callbacks, save isolation and generation budgets. The build also checks TypeScript.
+Tests cover held-key controls, reserve depletion, permanent endings, abandonment, promise callbacks, save isolation and generation budgets. The build also checks TypeScript.
 
 For a full campaign test with real model calls, pass your running server's URL:
 

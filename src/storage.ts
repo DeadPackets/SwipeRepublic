@@ -55,7 +55,7 @@ export function clearPreResetSaves(hostname: string) {
     ].includes(hostname)
   )
     return;
-  const marker = "swipe-republic:reset:2026-09-22";
+  const marker = "swipe-republic:reset:2026-09-22-purge-2";
   try {
     if (localStorage.getItem(marker)) return;
     for (let i = localStorage.length - 1; i >= 0; i--) {
@@ -64,7 +64,9 @@ export function clearPreResetSaves(hostname: string) {
         key &&
         (key === "swipe-republic:active" ||
           key === LEGACY_KEY ||
-          key.startsWith(SOCIETY_PREFIX))
+          key.startsWith(SOCIETY_PREFIX) ||
+          key.startsWith("swipe-republic:creation:") ||
+          key.startsWith("swipe-republic:action:"))
       )
         localStorage.removeItem(key);
     }

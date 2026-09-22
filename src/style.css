@@ -605,37 +605,6 @@ legend {
   color: #ced0bd;
   margin-bottom: 36px;
 }
-.succession {
-  border-top: 1px solid var(--line);
-  padding-top: 28px;
-  text-align: left;
-}
-.succession h2 {
-  font-size: 28px;
-  margin-bottom: 16px;
-}
-.successor-options {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-.successor-options button {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  text-align: left;
-  min-height: 60px;
-}
-.successor-options svg {
-  width: 24px;
-  height: 24px;
-  flex-shrink: 0;
-  color: var(--accent);
-}
-.successor-options button > span:last-child {
-  margin-left: auto;
-  color: var(--accent);
-}
 .ending > .text-button {
   margin-top: 18px;
 }
@@ -1380,9 +1349,6 @@ dialog.dialog-closing::backdrop {
 .ending h1 {
   font-size: clamp(42px, 6vw, 64px);
 }
-.ending .succession {
-  animation: arrive 600ms 400ms var(--ease) both;
-}
 @keyframes world-reveal {
   from {
     opacity: 0;
@@ -1599,7 +1565,7 @@ button:active:not(:disabled), .choices button:active:not(:disabled) { scale: 1; 
 .app[data-phase="intro"] .world-scene { opacity:.55; }
 .world-vignette { background:#10120f40; }
 .app[data-phase="intro"] .world-vignette { background:linear-gradient(#10120f40,#10120fc0); }
-.welcome, .founding, .ending, .ending .succession, .campaign-matches { animation:soft-reveal .5s ease-out; }
+.welcome, .founding, .ending, .campaign-matches { animation:soft-reveal .5s ease-out; }
 .world-arrival { max-width:550px; }
 .arrival-content { opacity:1; }
 .arrival-summary { font-size:26px; line-height:1.45; }
@@ -1615,7 +1581,7 @@ button:active:not(:disabled), .choices button:active:not(:disabled) { scale: 1; 
 textarea::placeholder { color:#b5b7a8; opacity:1; }
 .dialog-header h2 { font-size:32px; }
 .dialog-body .quiet, .footnote { font-size:16px; }
-.dialog-body .world-graphic, .successor-options .world-graphic { width:36px; height:36px; flex:none; background:#e0e1d2; padding:4px; border-radius:3px; }
+.dialog-body .world-graphic { width:36px; height:36px; flex:none; background:#e0e1d2; padding:4px; border-radius:3px; }
 .people-list > article { display:flex; gap:18px; align-items:center; padding:18px 0; }
 .people-list .character-silhouette { position:static; width:76px; height:88px; flex:none; }
 .people-list h3 { font:600 19px/1.4 "Manrope Variable",sans-serif; margin:0 0 6px; }
@@ -1664,3 +1630,8 @@ textarea::placeholder { color:#b5b7a8; opacity:1; }
 }
 .app[data-motion="reduced"] .outgoing-card { visibility:visible; }
 @media(prefers-reduced-motion:reduce) { .card-arrival,.welcome,.founding,.ending,.saving-decision {animation:none} }
+
+.danger-action { color:var(--danger); }
+.abandon-confirmation p { font-size:18px; line-height:1.5; }
+.abandon-actions { display:flex; flex-wrap:wrap; gap:12px; margin-top:24px; }
+.abandon-actions button { flex:1 1 160px; min-height:48px; font-size:17px; }

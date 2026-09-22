@@ -5,7 +5,7 @@ import {
   WORLD_IDENTITY_VERSION,
   publicGame,
   play,
-  succeed,
+  abandon,
   nextDraft,
   type Game,
   type World,
@@ -27,7 +27,7 @@ import {
 type Bindings = {
   CAMPAIGNS: D1Database;
   ART: R2Bucket;
-  SOCIETIES: DurableObjectNamespace<SocietyV2>;
+  SOCIETIES: DurableObjectNamespace<SocietyV3>;
   BUDGET: DurableObjectNamespace<Budget>;
   REQUEST_LIMIT: RateLimit;
   OPENROUTER_API_KEY: string;
@@ -67,11 +67,8 @@ const choiceSchema = mutationSchema.extend({
   cardId: uuid,
   side: z.union([z.literal(0), z.literal(1)]),
 });
-const successorSchema = mutationSchema.extend({
-  coalition: z.union([z.literal(0), z.literal(1)]),
-});
 
-export class SocietyV2 extends DurableObject<Bindings> {
+export class SocietyV3 extends DurableObject<Bindings> {
   private save: Save | null = null;
   constructor(ctx: DurableObjectState, env: Bindings) {
     super(ctx, env);
@@ -178,10 +175,11 @@ export class SocietyV2 extends DurableObject<Bindings> {
         throw new Error("Your reign has already begun.");
       s.game.phase = "playing";
       s.game.version++;
-    } else if (operation === "succeed") {
-      const body = successorSchema.parse(raw);
-      s.game = succeed(s.game, body.coalition);
+    } else if (operation === "abandon") {
+      s.game = abandon(s.game);
       s.lease = null;
+      s.queued = false;
+      await this.ctx.storage.deleteAlarm();
     } else throw new Error("Unknown action");
     s.requests = [...s.requests, input.requestId].slice(-40);
     s.error = null;
@@ -515,7 +513,7 @@ export class Budget extends DurableObject<Bindings> {
 
 async function prepare(
   env: Bindings,
-  stub: Pick<SocietyV2, "acquire" | "allocated" | "finish">,
+  stub: Pick<SocietyV3, "acquire" | "allocated" | "finish">,
   owner: string,
   background = false,
 ) {
@@ -605,7 +603,7 @@ export default {
       );
       if (asset && request.method === "GET") {
         const cacheKey = new Request(`${url.origin}${url.pathname}`);
-        const cache = await caches.open("world-art-v2");
+        const cache = await caches.open("world-art-v3");
         const cached = await cache.match(cacheKey);
         if (cached) return cached;
         const object = await env.ART.get(`${asset[1]}/${asset[2]}`);
@@ -651,7 +649,7 @@ export default {
           return json({ error: "Request too large" }, 413);
       }
       const path = url.pathname.match(
-        /^\/api\/games(?:\/([0-9a-f-]{36})(?:\/(start|choose|prepare|succeed))?)?$/,
+        /^\/api\/games(?:\/([0-9a-f-]{36})(?:\/(start|choose|prepare|abandon))?)?$/,
       );
       const lookup =
         url.pathname === "/api/campaigns/match" && request.method === "POST";

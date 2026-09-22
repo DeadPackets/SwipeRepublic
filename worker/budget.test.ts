@@ -8,7 +8,7 @@ mock.module("cloudflare:workers", () => ({
     ) {}
   },
 }));
-const { SocietyV2: Society } = await import("./index");
+const { SocietyV3: Society } = await import("./index");
 
 test("a cheap callback fits the remaining allowance and completion is charged once", async () => {
   const world: World = {
@@ -63,6 +63,7 @@ test("a cheap callback fits the remaining allowance and completion is charged on
     },
     storage: {
       setAlarm: async () => {},
+      deleteAlarm: async () => {},
       get: async () => saved,
       put: async (_: string, value: unknown) => {
         if (failNextWrite) {
@@ -120,6 +121,9 @@ function harness(initial: unknown, bindings: Record<string, unknown> = {}) {
       get: async () => structuredClone(saved),
       put: async (_: string, value: unknown) => {
         saved = structuredClone(value);
+      },
+      deleteAlarm: async () => {
+        alarms.length = 0;
       },
       setAlarm: async (time: number) => {
         alarms.push(time);
@@ -311,6 +315,7 @@ test("legacy daily creation counts do not block new generation", async () => {
       },
       getAlarm: async () => 1,
       setAlarm: async () => {},
+      deleteAlarm: async () => {},
     },
   } as unknown as DurableObjectState;
   const budget = new Budget(ctx, {
@@ -406,4 +411,36 @@ test("artwork refresh preserves a decision made while generation is in flight", 
   expect(await h.society.acquire("owner", true)).not.toMatchObject({
     lease: { kind: "identity" },
   });
+});
+
+test("abandoning stops queued work and ignores an in-flight generation result", async () => {
+  const game = freshGame("test", "Test", {
+    name: "Test", era: "Now", role: "Steward", summary: "Test", calendar: "Day",
+    tone: "earth", factions: [], resources: [], characters: [],
+  });
+  game.phase = "playing";
+  const h = harness({ ...emptySave, game, queued: true });
+  await h.ready;
+  const work = await h.society.acquire("owner", false);
+  await h.society.allocated("owner", work!.lease.token);
+  const action = {version: 0, requestId: crypto.randomUUID()};
+  await h.society.mutate("owner", "abandon", action);
+  await h.society.mutate("owner", "abandon", action);
+  await h.society.finish("owner", work!.lease.token, {
+    world: {...game.world, name: "Late result"}, cost: .004,
+  });
+  expect(h.saved().game.reign.ended.kind).toBe("abandoned");
+  expect(h.saved().game.endings).toHaveLength(1);
+  expect(h.saved().game.world.name).toBe("Test");
+  expect(h.saved().queued).toBe(false);
+  expect(h.alarms).toHaveLength(0);
+  expect(h.saved().lease).toBeNull();
+  expect(h.saved().spent).toBeCloseTo(.004);
+  expect(await h.society.acquire("owner", false)).toBeNull();
+  await expect(h.society.mutate("owner", "succeed", {
+    version: 1, requestId: crypto.randomUUID(), coalition: 0,
+  })).rejects.toThrow("Unknown action");
+  await expect(h.society.mutate("other", "abandon", {
+    version: 1, requestId: crypto.randomUUID(),
+  })).rejects.toThrow("Society not found");
 });

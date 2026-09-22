@@ -2,7 +2,7 @@ import { test, expect } from "bun:test";
 import {
   freshGame,
   play,
-  succeed,
+  abandon,
   nextDraft,
   type World,
   type Card,
@@ -92,43 +92,40 @@ test("a choice changes support once, records history, and carries a promise into
   };
   expect(play(result, "callback", 0).commitments).toHaveLength(0);
 });
-test("simultaneous collapse is terminal and succession preserves the world without an instant repeat defeat", () => {
+test("simultaneous collapse permanently ends the run and preserves its chronicle", () => {
   const g = fixture();
   g.reign.support = [5, 50, 5, 50];
   g.card!.reactions[0]![2]!.delta = -12;
   const result = play(g, "one", 0);
   expect(result.reign.ended?.kind).toBe("fall");
   expect(result.reign.ended?.reason).toContain("Faction 2");
-  const next = succeed(result, 1);
-  expect(next.reign.number).toBe(2);
-  expect(next.reign.support.every((n) => n >= 35)).toBe(true);
-  expect(next.legacies).toContain("Public pumps");
-  expect(next.commitments).toHaveLength(1);
+  expect(result.card).toBeNull();
+  expect(result.deck).toHaveLength(0);
+  expect(result.history).toHaveLength(1);
+  expect(() => play(result, "one", 0)).toThrow();
 });
-test("survival continues beyond 36 decisions and five reigns", () => {
+test("survival continues beyond 36 decisions without a fixed ending", () => {
   const g = fixture();
   g.reign.turn = 35;
   expect(play(g, "one", 1).reign.ended).toBeNull();
   g.reign.turn = 160;
   expect(play(g, "one", 1).reign.ended).toBeNull();
-  g.reign.number = 5;
-  g.reign.support[0] = 1;
-  expect(succeed(play(g, "one", 0), 1).reign.number).toBe(6);
 });
 
-test("an inherited promise remains a real decision", () => {
-  const g = fixture();
-  g.reign.support[0] = 5;
-  const next = succeed(play(g, "one", 0), 1);
-  next.totalTurns = 4;
-  const callback = nextDraft(next)!;
-  next.card = {
-    ...callback.draft,
-    id: "inherited",
-    commitmentId: callback.commitmentId,
-    reactions: card.reactions,
-  };
-  expect(play(next, "inherited", 0).commitments).toHaveLength(0);
+test("abandoning ends the run without adding a decision or losing its chronicle", () => {
+  const g = play(fixture(), "one", 0);
+  g.card = structuredClone(card);
+  const result = abandon(g);
+  expect(result.reign.ended?.kind).toBe("abandoned");
+  expect(result.totalTurns).toBe(g.totalTurns);
+  expect(result.history).toEqual(g.history);
+  expect(result.legacies).toEqual(g.legacies);
+  expect(result.version).toBe(g.version + 1);
+  expect(result.card).toBeNull();
+  expect(result.deck).toHaveLength(0);
+  expect(g.reign.ended).toBeNull();
+  expect(() => play(result, "one", 1)).toThrow();
+  expect(() => abandon(result)).toThrow();
 });
 
 test("history records actual gains at support limits", () => {
@@ -164,7 +161,7 @@ test("reserve choices persist, replenish at the cap and cause a real loss at zer
   const lost = play(g, "one", 1);
   expect(lost.reserve).toBe(0);
   expect(lost.reign.ended?.reason).toContain("Air reserves run out");
-  expect(succeed(lost, 0).reserve).toBe(6);
+  expect(() => play(lost, "one", 0)).toThrow();
   g.reserve = 8;
   expect(play(g, "one", 0).reserve).toBe(8);
 });

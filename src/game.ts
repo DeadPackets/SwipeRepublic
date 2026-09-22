@@ -172,7 +172,7 @@ export type Event = {
   deltas: number[];
 };
 export type Ending = {
-  kind: "fall" | "retired" | "term";
+  kind: "fall" | "retired" | "term" | "abandoned";
   title: string;
   reason: string;
   turn: number;
@@ -318,24 +318,17 @@ export function play(game: Game, cardId: string, side: Side): Game {
   return g;
 }
 
-export function succeed(game: Game, coalition: 0 | 1): Game {
-  if (!game.reign.ended)
-    throw new Error("This chronicle is complete. Begin another society.");
+export function abandon(game: Game): Game {
+  if (game.phase !== "playing" || game.reign.ended)
+    throw new Error("This run has already ended.");
   const g = structuredClone(game);
-  g.reign = {
-    number: g.reign.number + 1,
-    ruler:
-      coalition === 0
-        ? `The ${g.world.factions[0]!.name} candidate`
-        : `The ${g.world.factions[2]!.name} candidate`,
-    turn: 0,
-    support: coalition === 0 ? [65, 40, 40, 55] : [40, 55, 65, 40],
-    ended: null,
-  };
-  if (g.world.pressure) g.reserve = 6;
+  end(
+    g,
+    "abandoned",
+    "Run abandoned",
+    "You left office. This run is over; your chronicle is saved.",
+  );
   g.version++;
-  g.card = null;
-  g.deck = [];
   return g;
 }
 

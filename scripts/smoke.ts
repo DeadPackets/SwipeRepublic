@@ -135,16 +135,5 @@ if (mode === "create") {
       break;
     }
   }
-} else if (mode === "succeed") {
-  const r = await request(`/api/games/${saved.id}/succeed`, {
-    requestId: crypto.randomUUID(),
-    version: saved.game.version,
-    coalition: 1,
-  });
-  assert.equal(r.status, 200, JSON.stringify(r.value));
-  assert.equal(r.value.game.reign.number, saved.game.reign.number + 1);
-  assert.deepEqual(r.value.game.legacies, saved.game.legacies);
-  saved.game = r.value.game;
-  await persist();
-  console.log("Succession and inherited laws: PASS");
+
 }

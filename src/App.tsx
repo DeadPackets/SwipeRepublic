@@ -123,7 +123,7 @@ export default function App() {
     unavailable?: boolean;
   } | null>(null);
   const [dialog, setDialog] = useState<
-    "menu" | "chronicle" | "world" | "help" | null
+    "menu" | "chronicle" | "world" | "help" | "abandon" | null
   >(null);
   const dialogRef = useRef<HTMLDialogElement>(null);
   const [factionDetail, setFactionDetail] = useState<number | null>(null);
@@ -298,12 +298,19 @@ export default function App() {
       const data = await api(action.path, action.body);
       write(`swipe-republic:action:${target}`, null);
       accept(data, target);
+      if (kind === "abandon" && active.current === target) newSociety();
     } catch (cause) {
       if (active.current === target) setError((cause as Error).message);
     } finally {
       lock.current = false;
       if (active.current === target) setWorking(false);
     }
+  }
+  async function abandonRun() {
+    const target = gameRef.current?.id;
+    const pending = read<Action | null>(`swipe-republic:action:${target}`, null);
+    if (pending?.path === `/api/games/${target}/abandon`) await retry();
+    else await mutate("abandon");
   }
   async function retry() {
     if (lock.current) return;
@@ -358,6 +365,8 @@ export default function App() {
       )
         data = await api(`/api/games/${target}/prepare`, {});
       accept(data, target);
+      if (action?.path.endsWith("/abandon") && data.game?.reign.ended?.kind === "abandoned" && active.current === target)
+        newSociety();
     } catch (cause) {
       if (active.current === target) setError((cause as Error).message);
     } finally {
@@ -738,8 +747,7 @@ export default function App() {
             <p className="reign-line">
               {game.world.name}
               <span>
-                {game.world.calendar} {game.reign.turn + 1} · Reign{" "}
-                {game.reign.number}
+                {game.world.calendar} {game.reign.turn + 1}
               </span>
             </p>
             <div className="factions" aria-label="Faction support">
@@ -888,30 +896,13 @@ export default function App() {
           key={`${game.id}-ending-${game.reign.number}`}
         >
           <p className="setting-line">
-            Reign {game.reign.number} · {game.reign.turn} decisions
+            {game.reign.turn} {game.reign.turn === 1 ? "decision" : "decisions"}
           </p>
           <h1>{game.reign.ended.title}</h1>
           <p className="ending-reason">{game.reign.ended.reason}</p>
-          {
-            <section className="succession">
-              <h2>Who rules next?</h2>
-              <div className="successor-options">
-                {([0, 1] as const).map((c) => (
-                  <button
-                    key={c}
-                    disabled={working}
-                    onClick={() => void mutate("succeed", { coalition: c })}
-                  >
-                    <FactionIcon
-                      faction={game.world.factions[c === 0 ? 0 : 2]!}
-                    />
-                    <span>{game.world.factions[c === 0 ? 0 : 2].name}</span>
-                    <span aria-hidden="true">→</span>
-                  </button>
-                ))}
-              </div>
-            </section>
-          }
+          <button className="primary" onClick={newSociety}>
+            Start a new society
+          </button>
           <button
             className="text-button"
             onClick={() => setDialog("chronicle")}
@@ -942,7 +933,9 @@ export default function App() {
                   ? "Chronicle"
                   : dialog === "world"
                     ? game?.world.name
-                    : "How to play"}
+                    : dialog === "abandon"
+                      ? "Abandon this run?"
+                      : "How to play"}
             </h2>
             <button
               className="close-dialog"
@@ -988,7 +981,24 @@ export default function App() {
                 <button disabled={working || checking} onClick={newSociety}>
                   Saved games<span>→</span>
                 </button>
+                {game?.phase === "playing" && !game.reign.ended && (
+                  <button className="danger-action" disabled={working || Boolean(departure)} onClick={() => setDialog("abandon")}>
+                    Abandon run<span>→</span>
+                  </button>
+                )}
               </nav>
+            )}
+            {dialog === "abandon" && game && (
+              <div className="abandon-confirmation">
+                <p>This ends your run permanently. Your chronicle stays in Saved games.</p>
+                {error && <p role="alert" className="error-message">{error}</p>}
+                <div className="abandon-actions">
+                  <button className="primary" disabled={working} onClick={closeDialog}>Keep playing</button>
+                  <button className="danger-action" disabled={working} onClick={() => void abandonRun()}>
+                    {working ? "Ending run…" : "Abandon run"}
+                  </button>
+                </div>
+              </div>
             )}
             {dialog === "help" && (
               <div className="help">
@@ -999,8 +1009,7 @@ export default function App() {
                     it wants.
                   </li>
                   <li>
-                    Promises return later. Your successor inherits your laws and
-                    debts.
+                    Promises return later. Your choices have lasting consequences.
                   </li>
                 </ol>
                 <details>
@@ -1011,8 +1020,7 @@ export default function App() {
                   </p>
                   <p>
                     Your reign lasts until a faction reaches zero or the reserve
-                    runs out. A successor inherits your laws and unfinished
-                    promises.
+                    runs out. That ends the run permanently. Your chronicle stays saved.
                   </p>
                   <p>
                     The arrows above a faction show its reaction. A question
@@ -1106,7 +1114,7 @@ export default function App() {
                     {[...game.history].reverse().map((e) => (
                       <li key={e.turn}>
                         <span className="quiet">
-                          {game.world.calendar} {e.turn} · Reign {e.reign}
+                          {game.world.calendar} {e.turn}
                         </span>
                         <h3>{e.action}</h3>
                         <p>{e.consequence}</p>

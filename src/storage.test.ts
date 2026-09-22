@@ -47,6 +47,9 @@ test("production reset clears only old save pointers once and leaves local devel
     ["swipe-republic:active", '"old"'],
     ["swipe-republic:societies", "[]"],
     ["swipe-republic:society:v1:old", "{}"],
+    ["swipe-republic:creation:old", "{}"],
+    ["swipe-republic:action:old", "{}"],
+    ["swipe-republic:reset:2026-09-22", "done"],
     ["swipe-republic:motion", '"reduced"'],
     ["other-app", "keep"],
   ]);
@@ -71,6 +74,8 @@ test("production reset clears only old save pointers once and leaves local devel
     expect(values.has("swipe-republic:society:v1:old")).toBe(false);
     expect(values.get("swipe-republic:motion")).toBe('"reduced"');
     expect(values.get("other-app")).toBe("keep");
+    expect(values.has("swipe-republic:creation:old")).toBe(false);
+    expect(values.has("swipe-republic:action:old")).toBe(false);
     values.set("swipe-republic:society:v1:new", "{}");
     clearPreResetSaves("swiperepublic.deadpackets.pw");
     expect(values.has("swipe-republic:society:v1:new")).toBe(true);

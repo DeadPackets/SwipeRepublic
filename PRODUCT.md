@@ -10,7 +10,7 @@ People playing short browser sessions on phones or desktops. They describe a soc
 
 ## Product Purpose
 
-A Reigns-style game with player-defined settings, recurring characters, four competing factions, and consequences that survive succession. Engagement comes from difficult choices, promises returning, and surviving in power.
+A Reigns-style game with player-defined settings, recurring characters, four competing factions, and consequences that persist throughout a run. Engagement comes from difficult choices, promises returning, and surviving in power.
 
 ## Brand Personality
 
