@@ -17,3 +17,11 @@ During review, the preparation countdown also received its own progress-track se
 ## Compatibility
 
 Existing character indices, cards, history and art stay valid. Old worlds may gain identities and additional cast when their remaining AI allowance permits it. Existing unscored reserve choices maintain reserves. Shared template version 2 excludes old six-person templates from new matches without deleting saves.
+
+## Production
+
+- Main implementation commit: `f4a54fe`, pushed to `origin/main`.
+- Cloudflare version: `4b430e83-0e8b-4983-9ea0-8fd09dac4e28` on `https://swiperepublic.deadpackets.pw/`.
+- Health and new JavaScript/CSS assets return HTTP 200. Existing browser save opens on Day 34; no decision was made in that save. Browser error log is empty.
+- A fresh Observatory Republic generation first returned the generic preparation error. The saved test completed after an explicit retry; the first error's exact cause was not captured. The successful world call took 48.2 seconds, its background 13.0 seconds and first dialogue 8.1 seconds. No code change was made for an unconfirmed cause.
+- Production reuse smoke then passed in 8 seconds: 24 characters, one 477,050-byte background, 99.56 similarity, private ownership, persisted art, independent reuse and idempotent decisions.
