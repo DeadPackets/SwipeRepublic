@@ -1,16 +1,31 @@
-import { memo } from "react";
+import { memo, useLayoutEffect, useRef } from "react";
 import type { CSSProperties } from "react";
 import type { Graphic, World } from "./game";
 
 export const WorldGraphic = memo(function WorldGraphic({
   graphic,
   className = "",
+  fit = false,
 }: {
   graphic: Graphic;
   className?: string;
+  fit?: boolean;
 }) {
+  const ref = useRef<SVGSVGElement>(null);
+  useLayoutEffect(() => {
+    const svg = ref.current;
+    if (!svg || !fit) return;
+    const bounds = svg.getBBox();
+    const size = Math.max(bounds.width, bounds.height) * 1.1;
+    if (!Number.isFinite(size) || size <= 0) return;
+    svg.setAttribute(
+      "viewBox",
+      `${bounds.x + (bounds.width - size) / 2} ${bounds.y + (bounds.height - size) / 2} ${size} ${size}`,
+    );
+  }, [graphic, fit]);
   return (
     <svg
+      ref={ref}
       className={`world-graphic ${className}`}
       viewBox="0 0 100 100"
       aria-hidden="true"
@@ -50,7 +65,7 @@ export function FactionIcon({
   faction: World["factions"][number];
 }) {
   return faction.symbol ? (
-    <WorldGraphic graphic={faction.symbol} />
+    <WorldGraphic graphic={faction.symbol} fit />
   ) : (
     <span className="faction-monogram" aria-hidden="true">
       {faction.name.slice(0, 1)}

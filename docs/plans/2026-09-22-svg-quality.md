@@ -14,3 +14,10 @@
 - Old saves remain playable. Their artwork updates through the existing background enrichment path when generation allowance remains; there is no production reset.
 - Final production-function sample: 24 valid portraits and four symbols, 121.8 seconds, $0.0125631495 including world creation. The generator uses low reasoning for world/identity artwork and keeps minimal reasoning for dialogue. Visual inspection confirmed connected outlines and facial features; repeated face shapes remain a limitation of this compact single-call approach.
 - Final checks: 24 tests, 114 assertions; TypeScript and production build pass. Both legacy polygons and new paths render without injecting SVG markup.
+
+## Faction symbol alignment follow-up
+
+- B is confirmed by the player. The art study placed SVGs inline with labels, and the four sample drawings filled only 36–54% of an off-center 100-unit canvas.
+- FactionIcon now fits the SVG viewBox to the rendered path/polygon bounds before paint. The authored aspect ratio stays intact, with equal margins and a centered drawing; portraits keep their original composition.
+- The study uses the actual React component, a four-column grid and separate aligned labels.
+- Browser checks: all four previously failed centering; all four now pass and fill 90.9% of their square viewBox. At 320 px, game tiles remain 36 px with 6 px arrow clearance; preview labels share one top edge and have zero center offset. Neither layout overflows.
