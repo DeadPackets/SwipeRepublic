@@ -329,3 +329,81 @@ test("legacy daily creation counts do not block new generation", async () => {
     "AI allowance",
   );
 });
+
+test("artwork refresh preserves a decision made while generation is in flight", async () => {
+  const world: World = {
+    name: "Test",
+    era: "Now",
+    role: "Steward",
+    summary: "Test",
+    calendar: "Day",
+    tone: "earth",
+    identityVersion: 2,
+    factions: Array.from({ length: 4 }, (_, i) => ({
+      name: `Group ${i}`,
+      description: "Test",
+      priority: "Test",
+      redLine: "Test",
+    })),
+    resources: [],
+    characters: [
+      {
+        name: "Ada",
+        role: "Engineer",
+        faction: 0,
+        personality: "Direct",
+        appearance: "Human",
+      },
+    ],
+    pressure: { resource: "fuel", warning: "Fuel runs out" },
+  };
+  const game = freshGame("test", "Test society", world);
+  game.phase = "playing";
+  const card = {
+    id: crypto.randomUUID(),
+    title: "Wages",
+    body: "Pay us?",
+    character: 0,
+    kind: "ordinary" as const,
+    options: [0, 1].map(() => ({
+      label: "Pay",
+      consequence: "Paid",
+      promise: null,
+      legacy: null,
+    })),
+    reactions: [0, 1].map(() =>
+      Array.from({ length: 4 }, () => ({ delta: 1, uncertain: false })),
+    ),
+    reserveChanges: [1, 1],
+  };
+  game.card = card;
+  game.deck = [
+    { ...card, id: crypto.randomUUID() },
+    { ...card, id: crypto.randomUUID() },
+  ];
+  const h = harness({ ...emptySave, game });
+  await h.ready;
+  const work = await h.society.acquire("owner", true);
+  expect(work?.lease.kind).toBe("identity");
+  await h.society.mutate("owner", "choose", {
+    version: 0,
+    requestId: crypto.randomUUID(),
+    cardId: card.id,
+    side: 0,
+  });
+  const nextCard = h.saved().game.card.id;
+  await h.society.finish("owner", work!.lease.token, {
+    world: { ...world, identityVersion: 3 },
+    cost: 0.01,
+  });
+  const updated = h.saved().game;
+  expect(updated.world.identityVersion).toBe(3);
+  expect(updated.world.characters[0].name).toBe("Ada");
+  expect(updated.totalTurns).toBe(1);
+  expect(updated.history[0].action).toBe("Pay");
+  expect(updated.card.id).toBe(nextCard);
+  expect(updated.reserve).toBe(6);
+  expect(await h.society.acquire("owner", true)).not.toMatchObject({
+    lease: { kind: "identity" },
+  });
+});

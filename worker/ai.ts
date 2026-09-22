@@ -4,6 +4,7 @@ import { TypeSafeClient, choice } from "@typesafe-ai/sdk";
 import { z } from "zod";
 import {
   worldSchema,
+  WORLD_IDENTITY_VERSION,
   factionIdentitySchema,
   characterSchema,
   characterIdentitySchema,
@@ -26,12 +27,13 @@ async function generate<T>(
   prompt: string,
   maxOutputTokens: number,
   timeoutMs = 25000,
+  reasoningEffort: "minimal" | "low" = "minimal",
 ): Promise<{ value: T; cost: number }> {
   const start = Date.now();
   const router = createOpenRouter({ apiKey: key });
   const result = await generateText({
     model: router("~openai/gpt-luna-latest", {
-      reasoning: { effort: "minimal", exclude: true },
+      reasoning: { effort: reasoningEffort, exclude: true },
     }),
     system,
     prompt,
@@ -59,7 +61,9 @@ async function generate<T>(
 }
 
 const identityInstructions = `Characters must have distinct personal stakes, speech habits and relationships with named people in this cast. Include allies and rivals within each faction, not just between factions. Not everyone is an official. Include ordinary inhabitants, specialists, outsiders and people with something to hide. Respect the actual inhabitants, era and material culture. No fixed species list, stock characters or borrowed plots.
-Generate a silhouette for each person and a symbol for each faction as ordered filled polygons in a 100 by 100 coordinate square. Only bounded shape data, never SVG markup, paths, URLs, code or image prompts. Use 4–8 large polygons per silhouette, 1–5 per symbol, with points between 6 and 94. Compose from back to front. Use flat editorial cutouts, restrained dark and medium colors on pale paper, distinctive outline and one identifying accessory or marking. Figures can be nonhuman, abstract, immaterial, collective or mechanical. Do not invent faces, limbs or clothes for beings without them. Keep related faction motifs consistent, but every individual recognizable at 100 pixels. Faction colors are distinct muted dark hex colors; color represents affiliation, never moral goodness or hidden loyalty.
+Draw each character as a small editorial cabinet portrait with expressive curved contours, using filled SVG path data in a 100 by 100 viewBox. Return only d and fill, never markup, scripts, URLs, strokes, filters or image prompts. Absolute M L H V C Q Z commands only; all coordinates 0..100. Close each contour with Z. Group same-color details into subpaths. Use 6–10 layers, usually 400–700 total path characters per person. Use 3–5 flat colors with a dark silhouette, midtone and lighter plane. Fill x8..92, y8..98; no background or decorative frame.
+For beings with human anatomy, the first dark path must be one continuous outer silhouette connecting head, neck and shoulders; overlay skin and clothing planes on it, never draw a detached head above a detached torso. Compose that silhouette individually before adding details. Draw a recognizable three-quarter head-and-shoulders portrait: a visible skin-colored neck OVERLAPPING the jaw and clothing (no empty strip or floating head), a distinct hairline and hairstyle, eye/brow shapes, a nose plane, an intentional mouth and era-appropriate clothing. Use curved C/Q contours for skull, cheeks, hair and shoulders; no hexagon heads, rectangle torsos, stick figures or blank generic token people. Head occupies roughly half the portrait. Design each thumbnail independently from that person's appearance: alternate long and broad faces, bald heads and distinct hair, older and younger features, side profiles and frontal poses. Use serious, tired, suspicious, angry or hopeful expressions where the character calls for them. Most people in this strained society should NOT be smiling. Do not repeat the same round head, triangular nose, closed-eye smile or torso template across the cast. Adjacent characters must differ clearly in overall outline, head angle and expression, not merely hair color. Keep the nose attached to a face shadow, not a floating black triangle. One role-specific detail per person; no tiny clutter. Preserve the person's described anatomy and appearance. For nonhuman, immaterial, mechanical or collective inhabitants, invent the equivalent distinctive portrait from THEIR actual form; never add human faces, torsos or clothing to a species without them.
+Faction symbols must depict a concrete object, organism, tool, structure or activity that explains THAT faction's place in the player's world. Use 2–6 simple filled paths, strong negative space, legible at 36px. No generic stars, gems, squares, circles or arbitrary geometric tokens as a substitute for meaning. Choose four distinct silhouettes. Faction colors are distinct muted dark hex colors. Vary clothing colors within each faction; do not dress an entire faction in one uniform unless the setting calls for it. Reuse a small faction-color accent in affiliated portraits, while skin, anatomy and materials keep appropriate colors. Color represents public affiliation, never moral goodness or hidden loyalty. Before returning, check each portrait reads as its character and every symbol reads as its faction at small size.
 Each faction label uses one or two short everyday words, each word at most eight letters; preserve meaning without clipping or abbreviating a word. Calendar is one short unit. The pressure resource is something that can run out in this society; warning is a short grammatical clause such as 'Heat reserves run out', without numbers, deadline or punctuation. The UI appends 'in 6 decisions'. All prose must be complete, never truncated to fit a field.`;
 export async function generateWorld(key: string, prompt: string) {
   const result = await generate(
@@ -70,15 +74,24 @@ Preserve every explicit place, date, era, species, political premise and level o
 Create 24 recurring characters, six per faction, with name, role, personality, appearance, voice, named relationship and silhouette. Introduce them gradually through cards; a large cast is not an exposition list. Describe only public affiliations; reveal private motives through decisions.
 ${identityInstructions}
 artDirection.scene describes the actual landscape, structures and inhabitants for a wide establishing image; do not invent buildings for beings without buildings. palette gives 3–4 suitable colors. identity neutrally preserves the player's explicit premise for semantic matching. tone is only a lighting fallback (earth, mars, night, forest), never a setting restriction. No assigned aims or fixed reign ending.`,
-    14000,
-    90000,
+    16000,
+    150000,
+    "low",
   );
   if (new Set(result.value.characters.map((p) => p.name)).size !== 24)
     throw new Error("Duplicate character names");
-  return { value: { ...result.value, identityVersion: 2 }, cost: result.cost };
+  return {
+    value: { ...result.value, identityVersion: WORLD_IDENTITY_VERSION },
+    cost: result.cost,
+  };
 }
 export async function enrichWorld(key: string, world: World) {
-  const { art: _art, ...reference } = world;
+  const { art: _art, ...base } = world;
+  const reference = {
+    ...base,
+    factions: world.factions.map(({ symbol: _, ...f }) => f),
+    characters: world.characters.map(({ silhouette: _, ...c }) => c),
+  };
   const schema = z.object({
     existing: z.array(characterIdentitySchema).length(world.characters.length),
     newcomers: z
@@ -93,12 +106,13 @@ export async function enrichWorld(key: string, world: World) {
     `Extend this established world without changing any existing person, institution, species or history: ${JSON.stringify(reference)}.
 Return identity data for existing characters in EXACT order, then enough newcomers for at least 24 people. Preserve names and faction indexes. Newcomers should create relationships and disagreements with established people, not replace them. Return four faction identities in their existing order and a pressure resource appropriate to the society.
 ${identityInstructions}`,
-    14000,
-    90000,
+    16000,
+    150000,
+    "low",
   );
   const updated: World = {
     ...world,
-    identityVersion: 2,
+    identityVersion: WORLD_IDENTITY_VERSION,
     factions: world.factions.map((f, i) => ({
       ...f,
       ...result.value.factions[i],
@@ -107,6 +121,8 @@ ${identityInstructions}`,
       ...world.characters.map((c, i) => ({
         ...c,
         ...result.value.existing[i],
+        voice: c.voice ?? result.value.existing[i]!.voice,
+        relationship: c.relationship ?? result.value.existing[i]!.relationship,
       })),
       ...result.value.newcomers,
     ],

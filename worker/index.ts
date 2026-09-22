@@ -2,6 +2,7 @@ import { DurableObject } from "cloudflare:workers";
 import { z } from "zod";
 import {
   freshGame,
+  WORLD_IDENTITY_VERSION,
   publicGame,
   play,
   succeed,
@@ -211,7 +212,7 @@ export class SocietyV2 extends DurableObject<Bindings> {
     const enrich =
       !!g?.card &&
       background &&
-      g.world.identityVersion !== 2 &&
+      g.world.identityVersion !== WORLD_IDENTITY_VERSION &&
       s.spent + 0.03 <= Number(this.env.GAME_AI_BUDGET);
     if (!enrich && g?.card && (!background || g.deck.length >= 2)) return null;
     if (!enrich && g && !g.card && background) return null;
@@ -226,7 +227,7 @@ export class SocietyV2 extends DurableObject<Bindings> {
       );
     const lease: Lease = {
       token: crypto.randomUUID(),
-      until: Date.now() + (!g || enrich ? 120000 : 60000),
+      until: Date.now() + (!g || enrich ? 180000 : 60000),
       kind: !g
         ? "world"
         : enrich
@@ -339,7 +340,7 @@ export class SocietyV2 extends DurableObject<Bindings> {
     )
       return;
     if (
-      s.game.world.identityVersion === 2 &&
+      s.game.world.identityVersion === WORLD_IDENTITY_VERSION &&
       s.game.card &&
       s.game.deck.length >= 2
     )

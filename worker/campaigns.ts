@@ -1,7 +1,7 @@
 import { score, TypeSafeClient } from "@typesafe-ai/sdk";
 import { freshGame, type World, type Card } from "../src/game";
 
-export const CAMPAIGN_VERSION = 2;
+export const CAMPAIGN_VERSION = 3;
 export const MATCH_RESERVATION = 0.005;
 export type CampaignCandidate = {
   id: string;

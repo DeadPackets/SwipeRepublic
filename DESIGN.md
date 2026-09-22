@@ -14,7 +14,7 @@ New dilemmas target 8–28 spoken words in at most two short sentences; choice l
 
 ## Appearance
 
-Blackened olive background #10120f, surface #1d211b, warm ink #e8e4d9, muted ink #b5b7a8, brass #d1b989 and restrained danger red #efac9c. Newsreader carries dialogue and titles; Manrope carries controls. Both fonts are bundled locally. The play column reaches 440 px. Faction-tinted pale cards hold 32 px dialogue (26–28 px on phones), a compact silhouette and speaker identity without a divider. Choice labels are 22 px on desktop and 20 px on phones. Faction icons are 36–40 px; reserve warnings are 17–20 px. Society forms use 18 px type. Cards grow to fit longer saved text.
+Blackened olive background #10120f, surface #1d211b, warm ink #e8e4d9, muted ink #b5b7a8, brass #d1b989 and restrained danger red #efac9c. Newsreader carries dialogue and titles; Manrope carries controls. Both fonts are bundled locally. The play column reaches 440 px. Faction-tinted pale cards hold 32 px dialogue (26–28 px on phones), a compact silhouette and speaker identity without a divider. Choice labels are 22 px on desktop and 20 px on phones. Faction icons are 36–40 px; reserve warnings are 17–20 px. A reserved 30 px row keeps 22 px reaction arrows above icons, with red for losses and a fade when previews change. Society forms use 18 px type. Cards grow to fit longer saved text.
 
 ## Motion
 
@@ -22,7 +22,7 @@ Cards follow the pointer and leave fully offscreen in 620 ms from their current 
 
 ## Assets
 
-Luna generates 24 characters, relationships, four faction palettes, faction symbols and compact polygon silhouettes specific to the player’s world. These validated polygons render locally as SVG; portraits and icons need no image calls. `meta/muse-image` paints one background per template. R2 stores it under an immutable template ID. D1 stores reusable worlds and opening cards. Older saves retain character indices, cards and history while their cast is enriched when their remaining allowance permits it. No species presets or preview fixtures enter production. A 30-second preparation estimate changes to “Still preparing…” if generation needs longer.
+Luna generates 24 characters, relationships, four faction palettes, faction symbols and compact illustrated silhouettes with curved paths specific to the player’s world. Validated filled paths use bounded absolute M/L/H/V/C/Q/Z commands and render locally as SVG; old polygon saves still render; portraits and icons need no image calls. `meta/muse-image` paints one background per template. R2 stores it under an immutable template ID. D1 stores reusable worlds and opening cards. Older saves retain character indices, cards and history while their cast is enriched when their remaining allowance permits it. No species presets or preview fixtures enter production. A 30-second preparation estimate changes to “Still preparing…” if generation needs longer.
 
 ## Accessibility and performance
 

@@ -64,7 +64,7 @@ The models have separate jobs. The game code applies the results.
 
 | Model | Job | Integration |
 |---|---|---|
-| Luna · `~openai/gpt-luna-latest` | Writes the world, cast and dialogue; supplies faction symbols and silhouettes as polygon data. | AI SDK + OpenRouter provider |
+| Luna · `~openai/gpt-luna-latest` | Writes the world, cast and dialogue; supplies faction symbols and silhouettes as vector path data. | AI SDK + OpenRouter provider |
 | Jev · `~typesafe/jev-latest` | Scores both choices against each faction's priorities, evaluates reserves, and checks similar societies. | TypeSafe SDK / System One through OpenRouter |
 | Muse · `meta/muse-image` | Paints one background for a new society. | OpenRouter Images API |
 

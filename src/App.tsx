@@ -756,7 +756,11 @@ export default function App() {
                   >
                     <FactionIcon faction={f} />
                     <span className="faction-label">{f.label ?? f.name}</span>
-                    <span className="reaction" aria-hidden="true">
+                    <span
+                      className={`reaction ${reaction && reaction.delta < 0 ? "negative" : ""}`}
+                      data-active={Boolean(reaction?.delta || reaction?.uncertain)}
+                      aria-hidden="true"
+                    >
                       {reaction?.delta ? (reaction.delta > 0 ? "↑" : "↓") : ""}
                       {reaction?.uncertain ? "?" : ""}
                     </span>

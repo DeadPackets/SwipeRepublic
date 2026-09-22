@@ -8,8 +8,51 @@ export const polygonSchema = z.object({
     .max(12),
   fill: z.string().regex(/^#[0-9a-fA-F]{6}$/),
 });
-export const graphicSchema = z.array(polygonSchema).min(1).max(10);
+function validPath(d: string) {
+  const arity: Record<string, number> = {
+    M: 2,
+    L: 2,
+    H: 1,
+    V: 1,
+    C: 6,
+    Q: 4,
+    Z: 0,
+  };
+  return [...d.matchAll(/([MLHVQCZ])([^MLHVQCZ]*)/g)].every(
+    ([, command, args]) => {
+      const values = args!
+        .trim()
+        .split(/[\s,]+/)
+        .filter(Boolean)
+        .map(Number);
+      const count = arity[command!]!;
+      return (
+        (count === 0
+          ? values.length === 0
+          : values.length >= count && values.length % count === 0) &&
+        values.every((n) => Number.isFinite(n) && n >= 0 && n <= 100)
+      );
+    },
+  );
+}
+export const vectorShapeSchema = z.object({
+  d: z
+    .string()
+    .max(1500)
+    .regex(/^M[MLHVQCZ0-9.,\s]+Z$/)
+    .refine(
+      validPath,
+      "Use complete absolute path commands with coordinates from 0 to 100",
+    ),
+  fill: z.string().regex(/^#[0-9a-fA-F]{6}$/),
+});
+export const vectorGraphicSchema = z.array(vectorShapeSchema).min(1).max(14);
+export const graphicSchema = z
+  .array(z.union([vectorShapeSchema, polygonSchema]))
+  .min(1)
+  .max(14);
 export type Graphic = z.infer<typeof graphicSchema>;
+export const WORLD_IDENTITY_VERSION = 3;
 export const factionSchema = z.object({
   name: short(32),
   description: short(160),
@@ -19,7 +62,7 @@ export const factionSchema = z.object({
 export const factionIdentitySchema = z.object({
   label: short(16),
   color: z.string().regex(/^#[0-9a-fA-F]{6}$/),
-  symbol: graphicSchema,
+  symbol: vectorGraphicSchema,
 });
 export const characterSchema = z.object({
   name: short(40),
@@ -31,7 +74,7 @@ export const characterSchema = z.object({
 export const characterIdentitySchema = z.object({
   voice: short(100),
   relationship: short(160),
-  silhouette: graphicSchema,
+  silhouette: vectorGraphicSchema,
 });
 export const pressureSchema = z.object({
   resource: short(28),
@@ -65,9 +108,17 @@ export type World = Omit<
   artDirection?: GeneratedWorld["artDirection"];
   pressure?: GeneratedWorld["pressure"];
   factions: (z.infer<typeof factionSchema> &
-    Partial<z.infer<typeof factionIdentitySchema>>)[];
+    Partial<
+      Omit<z.infer<typeof factionIdentitySchema>, "symbol"> & {
+        symbol: Graphic;
+      }
+    >)[];
   characters: (z.infer<typeof characterSchema> &
-    Partial<z.infer<typeof characterIdentitySchema>> & {
+    Partial<
+      Omit<z.infer<typeof characterIdentitySchema>, "silhouette"> & {
+        silhouette: Graphic;
+      }
+    > & {
       portrait?: number | null;
     })[];
   art?: Record<string, string>;

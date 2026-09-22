@@ -15,13 +15,17 @@ export const WorldGraphic = memo(function WorldGraphic({
       viewBox="0 0 100 100"
       aria-hidden="true"
     >
-      {graphic.map((shape, i) => (
-        <polygon
-          key={i}
-          points={shape.points.map((p) => p.join(",")).join(" ")}
-          fill={shape.fill}
-        />
-      ))}
+      {graphic.map((shape, i) =>
+        "d" in shape ? (
+          <path key={i} d={shape.d} fill={shape.fill} />
+        ) : (
+          <polygon
+            key={i}
+            points={shape.points.map((p) => p.join(",")).join(" ")}
+            fill={shape.fill}
+          />
+        ),
+      )}
     </svg>
   );
 });
